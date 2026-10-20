@@ -43,6 +43,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             if let state { it.state = state ? .on : .off }
             m.addItem(it)
         }
+        let updater = AppUpdater.shared
+        switch updater.state {
+        case .available:
+            add(menu, "更新到最新版本", #selector(installUpdate))
+            menu.items.last?.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
+            menu.addItem(.separator())
+        case .updating:
+            add(menu, "更新中…（完成後會自動重新開啟）", nil)
+            menu.addItem(.separator())
+        default:
+            break
+        }
         add(menu, "開啟 QUICK_SEEMD 工具箱", #selector(openMain))
         add(menu, "選擇檔案…", #selector(pickFiles))
         menu.addItem(.separator())
@@ -67,6 +79,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         add(menu, "拖曳轉換輪盤", #selector(toggleWheel), state: DragWheelController.isEnabled)
         add(menu, "登入時自動啟動", #selector(toggleLogin), state: AppPreferences.launchAtLogin)
+        if updater.canUpdate, updater.state != .updating {
+            add(menu, "檢查更新…", #selector(checkUpdate))
+        }
         add(menu, "設定…", #selector(openSettings), key: ",")
         menu.addItem(.separator())
         add(menu, "結束 QUICK_SEEMD", #selector(quit), key: "q")
@@ -81,6 +96,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     @objc private func toggleWheel() { DragWheelController.isEnabled.toggle() }
     @objc private func toggleLogin() { AppPreferences.launchAtLogin.toggle() }
     @objc private func openSettings() { SettingsWindow.shared.show() }
+    @objc private func checkUpdate() { AppUpdater.shared.checkInteractively() }
+    @objc private func installUpdate() { AppUpdater.shared.update() }
     @objc private func quit() { NSApp.terminate(nil) }
 }
 
@@ -133,6 +150,7 @@ struct SettingsView: View {
                 Toggle("登入時自動啟動", isOn: $login)
                     .onChange(of: login) { _, on in AppPreferences.launchAtLogin = on }
             }
+            Section("更新") { UpdateSettings() }
             Section("輸出") {
                 LabeledContent("工具箱的輸出位置") { OutputLocationPicker() }
                 Text("右鍵與拖曳轉換的結果一律存在原始檔案旁邊，不會覆蓋任何檔案。")
@@ -142,5 +160,44 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 520)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// 設定 › 更新：目前版本、自動檢查、一鍵更新。
+struct UpdateSettings: View {
+    @ObservedObject private var updater = AppUpdater.shared
+    @AppStorage(AppUpdater.autoCheckKey) private var autoCheck = true
+
+    var body: some View {
+        LabeledContent("目前版本") { Text(updater.versionText).monospaced() }
+        if updater.canUpdate {
+            Toggle("自動檢查更新", isOn: $autoCheck)
+            LabeledContent(statusText) {
+                switch updater.state {
+                case .available:
+                    Button("立即更新") { updater.update() }.keyboardShortcut(.defaultAction)
+                case .updating, .checking:
+                    ProgressView().controlSize(.small)
+                default:
+                    Button("檢查更新") { Task { await updater.check() } }
+                }
+            }
+            Text("更新會從 GitHub 下載最新版本、在這台 Mac 上編譯（約 3–5 分鐘），完成後自動重新開啟。已經允許過的權限都會保留。")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text("這一版不是用 scripts/install.sh 編譯的，無法自動更新。").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var statusText: String {
+        switch updater.state {
+        case .idle: return "尚未檢查"
+        case .checking: return "檢查中…"
+        case .upToDate: return "已是最新版本"
+        case .unpublished: return "這一版比 GitHub 上的新（尚未推送）"
+        case .available(let remote): return "有新版本（\(remote.prefix(7))）"
+        case .updating: return "更新中，完成後會自動重新開啟…"
+        case .failed(let reason): return reason
+        }
     }
 }

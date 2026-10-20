@@ -28,6 +28,12 @@
 			</array>
 		</dict>
 	</array>
+	<key>QSSourceCommit</key>
+	<string>$(QS_SOURCE_COMMIT)</string>
+	<key>QSSourceRepository</key>
+	<string>$(QS_SOURCE_REPOSITORY)</string>
+	<key>QSSourceTime</key>
+	<string>$(QS_SOURCE_TIME)</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>QUICK_SEEMD 需要控制 Microsoft Word、Excel、PowerPoint，才能用 Office 本身進行最高品質的文件轉換。</string>
 	<key>NSServices</key>

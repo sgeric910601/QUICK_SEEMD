@@ -57,6 +57,8 @@ struct IntegrationView: View {
                     Button("重新整理預覽快取") { Task { await resetPreviewCache() } }
                 }
 
+                PermissionsCard()
+
                 card(icon: "menubar.rectangle", tint: ToolPalette.teal, title: "選單列與背景執行",
                      status: .enabled, statusText: nil,
                      detail: "關閉視窗後 QUICK_SEEMD 會留在選單列待命，右鍵轉換與拖曳輪盤才能隨時使用。") {

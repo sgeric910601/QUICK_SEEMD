@@ -81,7 +81,7 @@ final class AppState: ObservableObject {
         MainWindow.shared.show()
     }
 
-    /// quickseemd://run?action=…&f=…（右鍵一鍵轉換）、quickseemd://open?tool=…&f=…
+    /// quickseemd://run?action=…&f=…（右鍵一鍵轉換）、quickseemd://open?tool=…&f=…、quickseemd://check-update
     func handle(url: URL) {
         guard let c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
         let items = c.queryItems ?? []
@@ -92,6 +92,8 @@ final class AppState: ObservableObject {
             if let action = items.first(where: { $0.name == "action" })?.value {
                 QuickActionRunner.shared.run(actionID: action, files: files)
             }
+        case "check-update":
+            AppUpdater.shared.checkInteractively()
         case "open":
             if let tool = items.first(where: { $0.name == "tool" })?.value {
                 openFromOutside(toolID: tool, files: files)

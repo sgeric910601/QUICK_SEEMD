@@ -1,19 +1,41 @@
 #!/bin/bash
-# 編譯 QUICK_SEEMD、安裝到「應用程式」資料夾並啟用空白鍵預覽擴充。
+# 編譯 QUICK_SEEMD、安裝到「應用程式」資料夾，並啟用空白鍵預覽與 Finder 右鍵選單。
+#   --app <路徑>      直接安裝已編譯好的 App，不重新編譯（App 內一鍵更新用）
+#   --wait-pid <pid>  等這個行程自己結束後才替換（一鍵更新時等舊版結束）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BUILD_DIR="${BUILD_DIR:-$PWD/build}"
-echo "▸ 編譯中（Release）…"
-xcodebuild -project QUICK_SEEMD.xcodeproj -scheme QUICK_SEEMD -configuration Release \
-  -derivedDataPath "$BUILD_DIR/DerivedData" build 2>&1 | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
-APP="$BUILD_DIR/DerivedData/Build/Products/Release/QUICK_SEEMD.app"
-[ -d "$APP" ] || { echo "✗ 編譯失敗"; exit 1; }
+APP=""
+WAIT_PID=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --app) APP="$2"; shift 2 ;;
+    --wait-pid) WAIT_PID="$2"; shift 2 ;;
+    *) echo "未知參數：$1"; exit 2 ;;
+  esac
+done
+
+if [ -z "$APP" ]; then
+  while IFS= read -r line; do
+    case "$line" in
+      APP=*) APP="${line#APP=}" ;;
+      *) echo "$line" ;;
+    esac
+  done < <(scripts/build.sh)
+fi
+[ -n "$APP" ] && [ -d "$APP" ] || { echo "✗ 沒有可安裝的 App"; exit 1; }
 
 DEST_DIR="/Applications"
 [ -w "$DEST_DIR" ] || DEST_DIR="$HOME/Applications"
 mkdir -p "$DEST_DIR"
 DEST="$DEST_DIR/QUICK_SEEMD.app"
+# 中途失敗時盡量把 App 重新打開，使用者才看得到失敗訊息
+trap 'echo "✗ 安裝失敗"; [ -d "$DEST" ] && open "$DEST"' ERR
+
+if [ -n "$WAIT_PID" ]; then
+  echo "▸ 等候舊版結束…"
+  for _ in $(seq 1 120); do kill -0 "$WAIT_PID" 2>/dev/null || break; sleep 0.5; done
+fi
 echo "▸ 安裝到 $DEST"
 pkill -x QUICK_SEEMD 2>/dev/null || true
 rm -rf "$DEST"

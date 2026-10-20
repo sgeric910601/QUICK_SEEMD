@@ -142,6 +142,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   fixed != data, PDFDocument(data: fixed) != nil else { return }
             try? fixed.write(to: url, options: .atomic)
         }
+        if AppUpdater.isHeadlessRequested {
+            NSApp.setActivationPolicy(.accessory)
+            MainActor.assumeIsolated { AppUpdater.shared.runHeadlessUpdate() }
+            return
+        }
         if ToolHeadless.isRequested {
             NSApp.setActivationPolicy(.accessory)
             ToolHeadless.runAndExit()
@@ -151,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSUpdateDynamicServices()
         DragWheelController.shared.start()
         MainActor.assumeIsolated { StatusItemController.shared.start() }
+        MainActor.assumeIsolated { AppUpdater.shared.start() }
 
         // 一般啟動才開主視窗；以登入項目、或被右鍵動作 / 開檔喚起時，安靜地在背景待命。
         let isDefaultLaunch = (notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool) ?? true
@@ -168,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        !ToolHeadless.isRequested && !AppPreferences.keepsRunningInBackground
+        !ToolHeadless.isRequested && !AppUpdater.isHeadlessRequested && !AppPreferences.keepsRunningInBackground
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
