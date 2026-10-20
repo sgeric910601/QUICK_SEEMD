@@ -1,0 +1,5 @@
+2026-10-18 09:12:01.123 INFO  [main] Server started on port 8080
+2026-10-18 09:12:05.456 DEBUG [db] Connection pool size=10
+2026-10-18 09:13:44.002 WARN  [api] Slow response: 1532 ms for "/api/orders"
+2026-10-18 09:15:10.900 ERROR [api] Failed to fetch user 42: timeout after 30s
+[2026-10-18T09:16:00Z] FATAL Out of memory

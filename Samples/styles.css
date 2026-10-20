@@ -1,0 +1,9 @@
+/* 主要樣式 */
+:root { --accent: #0a7aff; }
+body, .card > h1 { font-family: -apple-system, sans-serif; margin: 0 auto; }
+#app .button:hover {
+  color: var(--accent);
+  padding: 4px 12px !important;
+  background: rgba(10, 122, 255, .1);
+}
+@media (prefers-color-scheme: dark) { body { background: #1e1e1e; } }

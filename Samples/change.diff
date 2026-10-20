@@ -1,0 +1,10 @@
+diff --git a/hello.swift b/hello.swift
+index 3b18e51..a9c2f4e 100644
+--- a/hello.swift
++++ b/hello.swift
+@@ -1,5 +1,6 @@
+ import SwiftUI
+-let greeting = "Hello"
++let greeting = "你好"
++let count = 2
+ struct A {}

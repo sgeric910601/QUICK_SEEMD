@@ -1,0 +1,15 @@
+# 服務設定
+version: 3
+services:
+  web:
+    image: "nginx:1.27"
+    ports:
+      - 8080:80
+    environment:
+      DEBUG: true
+      NAME: 測試站
+    healthcheck: &hc
+      interval: 30s
+  worker:
+    <<: *hc
+    command: null

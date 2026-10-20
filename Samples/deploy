@@ -1,0 +1,8 @@
+#!/bin/bash
+# 沒有副檔名的 shell 腳本
+set -euo pipefail
+TARGET="${1:-production}"
+for host in web1 web2; do
+  echo "部署到 $host ($TARGET)"
+  ssh "$host" 'sudo systemctl restart app' || exit 1
+done
