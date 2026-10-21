@@ -46,4 +46,4 @@ sign() {
 for x in "$APP"/Contents/PlugIns/*.appex; do [ -d "$x" ] && sign "$x"; done
 sign "$APP"
 codesign --verify --deep --strict "$APP"
-echo "▸ 已用本機憑證簽署（$NAME）"
+echo "▸ 已用本機憑證簽署（${NAME}）"

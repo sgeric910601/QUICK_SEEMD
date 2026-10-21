@@ -28,6 +28,10 @@ final class AppUpdater: ObservableObject {
     nonisolated private static let pendingKey = "Update.pendingFrom"
     nonisolated private static let notifiedKey = "Update.notified"
     private var timer: Timer?
+    /// 正在進行的檢查；同一時間只跑一個，後來的呼叫等它完成（避免兩個 git 同時動原始碼資料夾）。
+    private var runningCheck: Task<Void, Never>?
+    /// 上次比對過的 GitHub 版本與結果；版本沒變就不必重新下載原始碼。
+    private var resolvedRemote: (commit: String, state: State)?
 
     /// 這一版編譯時的原始碼提交（由 scripts/build.sh 寫入 Info.plist）。
     let localCommit: String = {
@@ -41,10 +45,18 @@ final class AppUpdater: ObservableObject {
     }()
 
     /// 更新來源；可用 `defaults write dev.quickseemd.app Update.repository <網址>` 改成別的倉庫。
+    /// 只接受 https:// 、ssh:// 或 git@ 開頭的網址，其他值（例如以 - 開頭、會被 git 當成選項的字串）一律不用。
     var repository: String {
-        if let custom = UserDefaults.standard.string(forKey: Self.repositoryKey), !custom.isEmpty { return custom }
-        let value = Bundle.main.object(forInfoDictionaryKey: "QSSourceRepository") as? String ?? ""
-        return value.hasPrefix("$(") ? "" : value
+        let custom = UserDefaults.standard.string(forKey: Self.repositoryKey) ?? ""
+        let value = custom.isEmpty ? Bundle.main.object(forInfoDictionaryKey: "QSSourceRepository") as? String ?? "" : custom
+        return Self.isAllowedRepository(value) ? value : ""
+    }
+
+    nonisolated static func isAllowedRepository(_ value: String) -> Bool {
+        guard !value.contains(where: \.isWhitespace) else { return false }
+        if value.hasPrefix("https://") || value.hasPrefix("ssh://") { return true }
+        // git@主機:路徑；主機只能是一般網域字元，否則 git 可能把它當成本機路徑
+        return value.range(of: #"^git@[A-Za-z0-9.-]+:[^/-]"#, options: .regularExpression) != nil
     }
 
     var canUpdate: Bool { !localCommit.isEmpty && !repository.isEmpty }
@@ -97,27 +109,41 @@ final class AppUpdater: ObservableObject {
     func check() async {
         guard canUpdate else { state = .failed("這一版不是用安裝腳本編譯的，無法自動更新。"); return }
         guard state != .updating else { return }
+        if let runningCheck { await runningCheck.value; return }
+        let task = Task { await performCheck() }
+        runningCheck = task
+        await task.value
+        runningCheck = nil
+    }
+
+    private func performCheck() async {
         state = .checking
+        let result: State
         do {
-            let out = try await Self.git(["ls-remote", repository, "refs/heads/main"])
+            let out = try await Self.git(["ls-remote", "--", repository, "refs/heads/main"])
             guard let remote = out.split(whereSeparator: { $0 == "\t" || $0 == "\n" }).first.map(String.init), remote.count == 40 else {
                 throw ConversionError.other("讀不到 GitHub 上的版本。")
             }
             if remote == localCommit {
-                state = .upToDate
+                result = .upToDate
+            } else if let resolvedRemote, resolvedRemote.commit == remote {
+                result = resolvedRemote.state
             } else {
                 // 版本不同：先抓下 GitHub 上的最新提交，比較時間（也處理過強制推送的情況）
                 try await Self.prepareSource(repository: repository)
                 let time = Int(try await Self.git(["log", "-1", "--format=%ct", "HEAD"], in: Self.sourceDirectory)
                     .trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                state = time > localCommitTime ? .available(remote) : .unpublished
+                result = time > localCommitTime ? .available(remote) : .unpublished
+                resolvedRemote = (remote, result)
             }
             lastChecked = Date()
             updateLog.notice("檢查更新：本機 \(self.localCommit.prefix(7), privacy: .public)，GitHub \(remote.prefix(7), privacy: .public)")
         } catch {
             updateLog.error("檢查更新失敗：\(error.localizedDescription, privacy: .public)")
-            state = .failed(error.localizedDescription)
+            result = .failed(error.localizedDescription)
         }
+        // 檢查期間已經開始更新的話，不要把「更新中」蓋掉
+        if state == .checking { state = result }
     }
 
     /// 選單列的「檢查更新…」：有新版本就直接問要不要更新。
@@ -153,8 +179,11 @@ final class AppUpdater: ObservableObject {
         state = .updating
         let repository = repository
         let from = localCommit
+        let pendingCheck = runningCheck
         let job = ToolJob { _, context in
             do {
+                // 還有檢查在動原始碼資料夾的話，等它結束再開始
+                await pendingCheck?.value
                 try await Self.performUpdate(repository: repository, from: from) { context.progress($0, $1) }
                 await MainActor.run { NSApp.terminate(nil) }
                 return []
@@ -197,8 +226,9 @@ final class AppUpdater: ObservableObject {
         progress(0.15, "編譯中（約 3–5 分鐘）…")
         let app = try await build { line, fraction in progress(fraction, line) }
         progress(0.95, "安裝並重新開啟…")
-        UserDefaults.standard.set(from, forKey: pendingKey)
         try launchInstaller(app: app)
+        // 安裝程序確定啟動了才記下；它會等這個 App 結束才替換，不會搶在這之前重新開啟
+        UserDefaults.standard.set(from, forKey: pendingKey)
     }
 
     nonisolated static var supportDirectory: URL {
@@ -246,14 +276,14 @@ final class AppUpdater: ObservableObject {
         let fm = FileManager.default
         let source = sourceDirectory
         if fm.fileExists(atPath: source.appendingPathComponent(".git").path) {
-            try await git(["remote", "set-url", "origin", repository], in: source)
+            try await git(["remote", "set-url", "origin", "--", repository], in: source)
             try await git(["fetch", "--depth", "1", "origin", "main"], in: source)
             try await git(["reset", "--hard", "FETCH_HEAD"], in: source)
             try await git(["clean", "-fdx", "--quiet"], in: source)
         } else {
             try? fm.removeItem(at: source)
             try fm.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
-            try await git(["clone", "--depth", "1", "--branch", "main", repository, source.path])
+            try await git(["clone", "--depth", "1", "--branch", "main", "--", repository, source.path])
         }
     }
 

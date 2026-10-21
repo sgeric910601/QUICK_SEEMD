@@ -2,7 +2,8 @@
 # 編譯 Release 版、記下原始碼版本（給一鍵更新比對），並用本機固定憑證簽署。
 # 進度逐行輸出；最後一行是「APP=<編譯好的 App 路徑>」。
 set -euo pipefail
-cd "$(dirname "$0")/.."
+SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPTS/.."
 
 BUILD_DIR="${BUILD_DIR:-$PWD/build}"
 COMMIT=$(git rev-parse HEAD 2>/dev/null || true)
@@ -17,8 +18,8 @@ mkdir -p "$BUILD_DIR"
 if ! xcodebuild -project QUICK_SEEMD.xcodeproj -scheme QUICK_SEEMD -configuration Release \
     -derivedDataPath "$BUILD_DIR/DerivedData" \
     QS_SOURCE_COMMIT="$COMMIT" QS_SOURCE_TIME="$TIME" QS_SOURCE_REPOSITORY="$REPO" build > "$LOG" 2>&1; then
-  grep -E "error:" "$LOG" | sort -u | head -20
-  echo "✗ 編譯失敗（完整記錄：$LOG）"
+  grep -E "error:" "$LOG" | sort -u | head -20 || true
+  echo "✗ 編譯失敗（完整記錄：${LOG}）"
   exit 1
 fi
 
@@ -30,5 +31,5 @@ rm -rf "$APP"
 mkdir -p "$BUILD_DIR/Signed"
 ditto "$BUILT" "$APP"
 echo "▸ 簽署中…"
-"$(dirname "$0")/sign.sh" "$APP"
+"$SCRIPTS/sign.sh" "$APP"
 echo "APP=$APP"
