@@ -45,8 +45,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         let updater = AppUpdater.shared
         switch updater.state {
-        case .available:
-            add(menu, "更新到最新版本", #selector(installUpdate))
+        case .available(let release):
+            add(menu, "更新到最新版本（\(release.version)）", #selector(installUpdate))
             menu.items.last?.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
             menu.addItem(.separator())
         case .updating:
@@ -182,10 +182,13 @@ struct UpdateSettings: View {
                     Button("檢查更新") { Task { await updater.check() } }
                 }
             }
-            Text("更新會從 GitHub 下載最新版本、在這台 Mac 上編譯（約 3–5 分鐘），完成後自動重新開啟。已經允許過的權限都會保留。")
+            if case .available(let release) = updater.state {
+                Link("查看 \(release.version) 更新內容", destination: release.page).font(.caption)
+            }
+            Text("更新會從 GitHub 下載最新的發佈版本，確認是同一張憑證簽署後替換並重新開啟，約 1 分鐘。已經允許過的權限都會保留。")
                 .font(.caption).foregroundStyle(.secondary)
         } else {
-            Text("這一版不是用 scripts/install.sh 編譯的，無法自動更新。").font(.caption).foregroundStyle(.secondary)
+            Text("這一版沒有記錄更新來源，無法自動更新。").font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -194,8 +197,7 @@ struct UpdateSettings: View {
         case .idle: return "尚未檢查"
         case .checking: return "檢查中…"
         case .upToDate: return "已是最新版本"
-        case .unpublished: return "這一版比 GitHub 上的新（尚未推送）"
-        case .available(let remote): return "有新版本（\(remote.prefix(7))）"
+        case .available(let release): return "有新版本 \(release.version)"
         case .updating: return "更新中，完成後會自動重新開啟…"
         case .failed(let reason): return reason
         }

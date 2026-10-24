@@ -6,7 +6,7 @@
 # 憑證放在專用的鑰匙圈 ~/Library/Application Support/QUICK_SEEMD/Signing/，
 # 不會加進「登入」鑰匙圈，也不會變更任何系統信任設定。
 set -euo pipefail
-APP="${1:?用法：sign.sh <App 路徑>}"
+APP="${1:?用法：sign.sh <App 或 DMG 路徑>}"
 
 DIR="$HOME/Library/Application Support/QUICK_SEEMD/Signing"
 KC="$DIR/signing.keychain-db"
@@ -43,7 +43,12 @@ sign() {
   out=$(codesign --force --sign "$ID" --keychain "$KC" \
     --preserve-metadata=identifier,entitlements,flags,runtime "$1" 2>&1) || { echo "$out"; exit 1; }
 }
-for x in "$APP"/Contents/PlugIns/*.appex; do [ -d "$x" ] && sign "$x"; done
-sign "$APP"
-codesign --verify --deep --strict "$APP"
+if [[ "$APP" == *.dmg ]]; then
+  out=$(codesign --force --sign "$ID" --keychain "$KC" "$APP" 2>&1) || { echo "$out"; exit 1; }
+  codesign --verify "$APP"
+else
+  for x in "$APP"/Contents/PlugIns/*.appex; do [ -d "$x" ] && sign "$x"; done
+  sign "$APP"
+  codesign --verify --deep --strict "$APP"
+fi
 echo "▸ 已用本機憑證簽署（$NAME）"

@@ -157,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DragWheelController.shared.start()
         MainActor.assumeIsolated { StatusItemController.shared.start() }
         MainActor.assumeIsolated { AppUpdater.shared.start() }
+        MainActor.assumeIsolated { InstallLocation.checkOnLaunch() }
 
         // 一般啟動才開主視窗；以登入項目、或被右鍵動作 / 開檔喚起時，安靜地在背景待命。
         let isDefaultLaunch = (notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool) ?? true

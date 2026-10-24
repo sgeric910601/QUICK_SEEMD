@@ -7,15 +7,19 @@ cd "$(dirname "$0")/.."
 BUILD_DIR="${BUILD_DIR:-$PWD/build}"
 COMMIT=$(git rev-parse HEAD 2>/dev/null || true)
 TIME=$(git log -1 --format=%ct 2>/dev/null || true)
+# 版本號來自 VERSION 檔（發佈腳本會更新它）；QS_VERSION 可暫時覆寫（測試用）
+VERSION="${QS_VERSION:-$(cat VERSION 2>/dev/null || echo 1.0.0)}"
+BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo 1)
 # 去掉網址裡可能夾帶的帳號或權杖
 REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#//[^/@]*@#//#' || true)
 
 command -v xcodebuild >/dev/null || { echo "✗ 需要 Xcode 才能編譯"; exit 1; }
-echo "▸ 編譯中（Release，約 3–5 分鐘）…"
+echo "▸ 編譯 $VERSION（Release，約 3–5 分鐘）…"
 LOG="$BUILD_DIR/build.log"
 mkdir -p "$BUILD_DIR"
 if ! xcodebuild -project QUICK_SEEMD.xcodeproj -scheme QUICK_SEEMD -configuration Release \
     -derivedDataPath "$BUILD_DIR/DerivedData" \
+    MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
     QS_SOURCE_COMMIT="$COMMIT" QS_SOURCE_TIME="$TIME" QS_SOURCE_REPOSITORY="$REPO" build > "$LOG" 2>&1; then
   grep -E "error:" "$LOG" | sort -u | head -20
   echo "✗ 編譯失敗（完整記錄：$LOG）"

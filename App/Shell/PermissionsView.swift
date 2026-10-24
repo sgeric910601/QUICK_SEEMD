@@ -84,7 +84,7 @@ struct PermissionsCard: View {
                 }
                 Text(stable
                      ? "這一版用本機固定憑證簽署，系統把每次更新都當成同一個 App，已經允許過的權限都會保留。"
-                     : "請用 scripts/install.sh 安裝，或在選單列按「更新到最新版本」，之後的權限就會被記住。")
+                     : "請安裝 GitHub 上發佈的版本（或用 scripts/install.sh 安裝），之後的權限就會被記住。")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
