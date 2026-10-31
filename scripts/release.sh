@@ -66,10 +66,10 @@ ${CHANGES:-- 小幅修正}
 - 已經安裝的話：選單列圖示 →「更新到最新版本」，或「設定 › 更新」→「立即更新」。
 - 第一次安裝：打開 DMG，把 QUICK_SEEMD 拖到「應用程式」，再從「應用程式」打開。"
 
-echo "▸ 推送 $TAG…"
+echo "▸ 推送 ${TAG}…"
 git tag -a "$TAG" -m "QUICK_SEEMD $VERSION"
 git "${GIT_AUTH[@]}" push -q origin main "$TAG"
 
 echo "▸ 建立 GitHub Release…"
 "$GH" release create "$TAG" "$DMG" --title "QUICK_SEEMD $VERSION" --notes "$NOTES"
-echo "✓ 已發佈 $TAG（$DMG）"
+echo "✓ 已發佈 ${TAG}（${DMG}）"

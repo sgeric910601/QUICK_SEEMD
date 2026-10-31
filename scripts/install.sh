@@ -29,17 +29,31 @@ DEST_DIR="/Applications"
 [ -w "$DEST_DIR" ] || DEST_DIR="$HOME/Applications"
 mkdir -p "$DEST_DIR"
 DEST="$DEST_DIR/QUICK_SEEMD.app"
-# 中途失敗時盡量把 App 重新打開，使用者才看得到失敗訊息
-trap 'echo "✗ 安裝失敗"; [ -d "$DEST" ] && open "$DEST"' ERR
+# 先複製到同一個資料夾的暫存位置，再用 mv 替換：複製失敗時舊版還在。
+# 暫存名稱不用 .app 結尾，系統才不會把它們當成另一個 App。
+STAGE="$DEST_DIR/.QUICK_SEEMD.app.new"
+OLD="$DEST_DIR/.QUICK_SEEMD.app.old"
+# 中途失敗時先放回舊版、再清暫存，並盡量把 App 重新打開，使用者才看得到失敗訊息；
+# 清理步驟失敗也不能中斷 trap，否則舊版放不回去
+trap 'echo "✗ 安裝失敗"
+  if [ ! -d "$DEST" ] && [ -d "$OLD" ]; then mv "$OLD" "$DEST" || true; fi
+  rm -rf "$STAGE" || true
+  if [ -d "$DEST" ]; then open "$DEST" || true; fi' ERR
 
 if [ -n "$WAIT_PID" ]; then
   echo "▸ 等候舊版結束…"
   for _ in $(seq 1 120); do kill -0 "$WAIT_PID" 2>/dev/null || break; sleep 0.5; done
 fi
+# 上次在替換途中被中斷的話，舊版只剩 $OLD：先放回去再清
+if [ ! -d "$DEST" ] && [ -d "$OLD" ]; then mv "$OLD" "$DEST"; fi
+rm -rf "$STAGE" "$OLD"
+ditto "$APP" "$STAGE"
 echo "▸ 安裝到 $DEST"
 pkill -x QUICK_SEEMD 2>/dev/null || true
-rm -rf "$DEST"
-ditto "$APP" "$DEST"
+if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
+mv "$STAGE" "$DEST"
+# 新版已經就位，舊版刪不掉也不算安裝失敗（下次安裝會再清）
+rm -rf "$OLD" || true
 
 echo "▸ 登記並啟用空白鍵預覽與 Finder 右鍵選單"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
