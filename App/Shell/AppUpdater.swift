@@ -294,8 +294,10 @@ final class AppUpdater: ObservableObject {
         let app = try await extractApp(from: dmg, to: work)
         try await verify(app, requirement: requirement)
         progress(0.9, "安裝並重新開啟…")
-        UserDefaults.standard.set(from, forKey: pendingKey)
         try launchInstaller(app: app, destination: destination, enableExtensions: false)
+        // 安裝程序確定啟動了才記下：啟動失敗時，下次開啟才不會讀到上一次更新留下的「✓ 完成」而誤報成功。
+        // 安裝程序會等這個 App 結束才替換，不會搶在這之前重新開啟。
+        UserDefaults.standard.set(from, forKey: pendingKey)
     }
 
     nonisolated private static func download(_ release: Release, to directory: URL) async throws -> URL {
@@ -376,8 +378,9 @@ final class AppUpdater: ObservableObject {
         for x in "$DEST"/Contents/PlugIns/*.appex; do pluginkit -a "$x"; done
         for id in $IDS; do pluginkit -e use -i "$id"; done
         qlmanage -r >/dev/null 2>&1
-        open "$DEST"
+        # 「✓ 完成」要在開啟新版之前寫出：新版一啟動就會讀這份記錄判斷更新是否成功
         echo "✓ 完成"
+        open "$DEST"
         """
         let scriptURL = supportDirectory.appendingPathComponent("install-update.sh")
         try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)

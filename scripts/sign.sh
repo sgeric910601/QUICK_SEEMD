@@ -51,4 +51,4 @@ else
   sign "$APP"
   codesign --verify --deep --strict "$APP"
 fi
-echo "▸ 已用本機憑證簽署（$NAME）"
+echo "▸ 已用本機憑證簽署（${NAME}）"
