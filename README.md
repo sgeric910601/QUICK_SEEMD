@@ -166,3 +166,17 @@ open -n -W /Applications/QUICK_SEEMD.app --args --qs-run office.to-pdf --qs-out 
 ```
 
 預覽擴充的記錄：`/usr/bin/log stream --predicate 'subsystem == "dev.quickseemd.preview"'`
+
+## 致謝
+
+- [@liaw-boy](https://github.com/liaw-boy)：安裝與編譯腳本的修正（#1，部分內容併入 #2）
+
+## 授權
+
+Copyright © 2026 TSENG KUAN-CHENG 及各貢獻者，保留所有權利。這不是開源授權：
+
+- 原始碼公開供檢視；可以在自己的裝置上編譯、修改，供個人使用或準備貢獻，但不得散布
+- [Releases](https://github.com/sgeric910601/QUICK_SEEMD/releases) 發佈的版本（包括預先發行版本與 App 內更新）可以免費下載使用
+- 提交 PR 即表示同意 LICENSE 第 4 條的貢獻條款
+
+完整條款見 [LICENSE](LICENSE)，中英文有出入時以中文為準。
