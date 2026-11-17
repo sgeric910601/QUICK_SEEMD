@@ -123,8 +123,8 @@ def _unavailable(target: Target) -> Content:
         return _page(target, doc, can_open=False)
     if target.kind is TargetKind.MISSING:
         return _page(target, fallback.missing_page(target.name, target.path), can_open=False)
-    if target.kind is TargetKind.REMOTE:
-        return _page(target, fallback.remote_page(target.name, target.uri))
+    if target.kind is TargetKind.REMOTE:  # 連「用預設程式開啟」都不給，完全不碰那個位置
+        return _page(target, fallback.remote_page(target.name, target.uri), can_open=False)
     return _page(target, fallback.invalid_page(target.name), can_open=False)
 
 

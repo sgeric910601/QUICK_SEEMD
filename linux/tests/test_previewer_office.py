@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from quickseemd.core import backends, errors
+from quickseemd.core import backends, errors, process
+from quickseemd.core import soffice
 from quickseemd.previewer import office
 
 FAKE_SOFFICE = """#!/usr/bin/python3
@@ -18,6 +19,13 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["FAKE_SOFFICE_LOG"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps(args, ensure_ascii=False) + "\\n")
+copy_to = os.environ.get("FAKE_SOFFICE_COPY_PROFILE")
+if copy_to:
+    prof = next(a for a in args if a.startswith("-env:UserInstallation=file://"))
+    prof = prof[len("-env:UserInstallation=file://"):]
+    with open(os.path.join(prof, "user", "registrymodifications.xcu"), encoding="utf-8") as src:
+        with open(copy_to, "w", encoding="utf-8") as dst:
+            dst.write(src.read())
 mode = os.environ.get("FAKE_SOFFICE_MODE", "ok")
 if mode == "fail":
     sys.stderr.write("Error: source file could not be loaded\\n")
@@ -117,8 +125,8 @@ def test_convert_arguments(tmp_path: Path, fake_soffice: Path):
     assert os.path.isabs(outdir)
     assert args[-1] == str(src)
     profile = next(a for a in args if a.startswith("-env:UserInstallation="))
-    # 設定檔資料夾與輸出資料夾是這次專用的暫存資料夾
-    assert Path(outdir).parent.name.startswith("job-")
+    # 設定檔資料夾與輸出資料夾都在這次專用的暫存資料夾裡（結束後整個清掉）
+    assert any(part.startswith("job-") for part in Path(outdir).parts)
     assert "job-" in profile
 
 
@@ -175,13 +183,13 @@ def test_missing_soffice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_timeout_is_passed(tmp_path: Path, fake_soffice: Path, monkeypatch: pytest.MonkeyPatch):
     seen: dict = {}
-    real_run = office.process.run
+    real_run = process.run
 
     def spy(args, **kw):  # noqa: ANN001, ANN003
         seen.update(kw)
         return real_run(args, **kw)
 
-    monkeypatch.setattr(office.process, "run", spy)
+    monkeypatch.setattr(process, "run", spy)
     office.convert_to_pdf(_docx(tmp_path))
     assert seen["timeout"] == office.CONVERT_TIMEOUT == 60
 
@@ -216,3 +224,229 @@ def test_real_libreoffice_conversion(tmp_path: Path):
     pdf = office.convert_to_pdf(src)
     with pikepdf.open(pdf) as doc:
         assert len(doc.pages) >= 1
+
+
+# ------------------------------------------------------------------ 不能抓取文件裡連結的遠端資源
+
+
+def test_profile_blocks_untrusted_links(tmp_path: Path, fake_soffice: Path, monkeypatch):
+    """每次轉換的設定檔都要先寫好 BlockUntrustedRefererLinks=true。"""
+    seen = tmp_path / "profile-copy.xcu"
+    monkeypatch.setenv("FAKE_SOFFICE_COPY_PROFILE", str(seen))
+    office.convert_to_pdf(_docx(tmp_path))
+    text = seen.read_text("utf-8")
+    assert 'oor:path="/org.openoffice.Office.Common/Security/Scripting"' in text
+    assert '<prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value>' in text
+
+
+def test_profile_helper_never_overwrites(tmp_path: Path):
+    profile = soffice.make_profile(tmp_path)
+    assert (profile / "user" / "registrymodifications.xcu").is_file()
+    with pytest.raises(FileExistsError):
+        soffice.make_profile(tmp_path)
+
+
+def test_registry_hardening_settings():
+    xml = soffice.registry_xml()
+    expected = [
+        ("/org.openoffice.Office.Common/Security/Scripting", "BlockUntrustedRefererLinks", "true"),
+        ("/org.openoffice.Office.Common/Security/Scripting", "DisableMacrosExecution", "true"),
+        ("/org.openoffice.Office.Common/Security/Scripting", "MacroSecurityLevel", "3"),
+        # Calc：0 一律更新、1 永不、2 詢問；Writer：0 永不、1 手動、2 自動
+        ("/org.openoffice.Office.Calc/Content/Update", "Link", "1"),
+        ("/org.openoffice.Office.Writer/Content/Update", "Link", "0"),
+        ("/org.openoffice.Office.Calc/Formula/Load", "OOXMLRecalcMode", "1"),
+        ("/org.openoffice.Office.Calc/Formula/Load", "ODFRecalcMode", "1"),
+    ]
+    for path, name, value in expected:
+        item = (
+            f'<item oor:path="{path}"><prop oor:name="{name}" oor:op="fuse">'
+            f"<value>{value}</value></prop></item>"
+        )
+        assert item in xml, name
+
+
+def test_sandbox_falls_back_without_bwrap(tmp_path: Path, monkeypatch):
+    empty = tmp_path / "no-tools"
+    empty.mkdir()
+    monkeypatch.setenv("QUICKSEEMD_TOOL_PATH", str(empty))
+    backends.refresh()
+    try:
+        assert soffice.sandbox_prefix(tmp_path) == []  # 沒有 bwrap：只靠設定檔
+    finally:
+        backends.refresh()
+
+
+def _sandbox(tmp_path: Path) -> list[str]:
+    backends.refresh()
+    return soffice.sandbox_prefix(tmp_path)
+
+
+SESSION_VARS = (
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+)
+
+
+def _pairs(args: list[str], flag: str) -> list[str]:
+    return [args[i + 1] for i, a in enumerate(args) if a == flag]
+
+
+def test_sandbox_prefix_limits_writes(tmp_path: Path):
+    args = _sandbox(tmp_path)
+    if not args:
+        pytest.skip("這台電腦不能用 bwrap")
+    joined = " ".join(args)
+    for flag in ("--unshare-net", "--die-with-parent", "--ro-bind / /"):
+        assert flag in joined
+    assert args[-1] == "--"
+    # 私有的 /tmp、/var/tmp、/run：看不到桌面工作階段的通道（D-Bus、X11 的檔案 socket）
+    assert set(_pairs(args, "--tmpfs")) >= {"/tmp", "/var/tmp", "/run"}
+    root = str(tmp_path.resolve())
+    assert _pairs(args, "--bind") == [root]  # 只有這次的暫存資料夾可寫
+    # 暫存資料夾在 tmpfs 之後才掛上（放在 /tmp 底下也看得到）
+    last_tmpfs = max(i for i, a in enumerate(args) if a == "--tmpfs")
+    assert args.index("--bind") > last_tmpfs
+    assert set(_pairs(args, "--unsetenv")) >= set(SESSION_VARS)
+
+
+def _capture_convert(tmp_path: Path, monkeypatch, src: Path) -> list[str]:
+    """攔下 soffice.convert 實際要執行的指令（假裝 LibreOffice 產生了 PDF）。"""
+    seen: list[list[str]] = []
+
+    def fake_run_checked(args, _tool, **_kw):  # noqa: ANN001, ANN003
+        seen.append(list(args))
+        outdir = Path(args[args.index("--outdir") + 1])
+        (outdir / "out.pdf").write_bytes(b"%PDF-1.4")
+
+    monkeypatch.setattr(soffice.process, "run_checked", fake_run_checked)
+    monkeypatch.setattr(soffice, "lock_path", lambda: tmp_path / "soffice.lock")
+    soffice.convert(src, "pdf", tmp_path)
+    return seen[0]
+
+
+def test_convert_binds_input_read_only_after_tmpfs(tmp_path: Path, monkeypatch):
+    if not _sandbox(tmp_path):
+        pytest.skip("這台電腦不能用 bwrap")
+    src = _docx(tmp_path, "在暫存區的文件.docx")  # 位在 /tmp 底下：要特別掛進去
+    args = _capture_convert(tmp_path, monkeypatch, src)
+    sep = args.index("--")
+    sandbox = args[:sep]
+    resolved = str(src.resolve())
+    assert resolved in _pairs(sandbox, "--ro-bind")
+    ro_index = max(i for i, a in enumerate(sandbox) if a == "--ro-bind")
+    assert ro_index > max(i for i, a in enumerate(sandbox) if a == "--tmpfs")
+    assert args[-1] == resolved
+
+
+def test_fallback_without_bwrap_strips_session_variables(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(soffice, "sandbox_prefix", lambda _writable: [])
+    args = _capture_convert(tmp_path, monkeypatch, _docx(tmp_path))
+    assert args[0] == "/usr/bin/env"
+    assert set(_pairs(args, "-u")) >= set(SESSION_VARS)
+    assert any(a.startswith("-env:UserInstallation=") for a in args)
+
+
+def test_fallback_prefix_really_removes_variables():
+    probe = "import os, json; print(json.dumps(sorted(os.environ)))"
+    env = {v: "unix:path=/run/user/1000/bus" for v in SESSION_VARS}
+    res = process.run(
+        soffice.clean_env_prefix() + ["/usr/bin/python3", "-c", probe], env=env, timeout=30
+    )
+    assert res.returncode == 0
+    assert not set(json.loads(res.stdout)) & set(SESSION_VARS)
+
+
+def test_sandbox_hides_session_channels(tmp_path: Path):
+    prefix = _sandbox(tmp_path)
+    if not prefix:
+        pytest.skip("這台電腦不能用 bwrap")
+    probe = (
+        "import json, os\n"
+        "print(json.dumps({'env': sorted(os.environ), 'run': os.listdir('/run'),"
+        " 'tmp': os.listdir('/tmp')}))\n"
+    )
+    env = {v: "unix:path=/run/user/1000/bus" for v in SESSION_VARS}
+    res = process.run(prefix + ["/usr/bin/python3", "-c", probe], env=env, timeout=30)
+    assert res.returncode == 0, res.stderr
+    seen = json.loads(res.stdout)
+    assert not set(seen["env"]) & set(SESSION_VARS)
+    assert seen["run"] == []
+    # 私有的 /tmp 只看得到通往這次暫存資料夾的那一層，主機的 /tmp（.X11-unix 等）看不到
+    allowed = set()
+    if tmp_path.resolve().is_relative_to("/tmp"):
+        allowed.add(tmp_path.resolve().relative_to("/tmp").parts[0])
+    assert set(seen["tmp"]) <= allowed
+    assert ".X11-unix" not in seen["tmp"]
+
+
+def test_sandbox_really_has_no_network(tmp_path: Path):
+    prefix = _sandbox(tmp_path)
+    if not prefix:
+        pytest.skip("這台電腦不能用 bwrap")
+    from local_http import RecordingServer  # noqa: PLC0415
+
+    with RecordingServer() as server:
+        code = (
+            "import sys, urllib.request\n"
+            "try:\n    urllib.request.urlopen(sys.argv[1], timeout=3)\n"
+            "except OSError:\n    sys.exit(7)\n"
+        )
+        argv = prefix + ["/usr/bin/python3", "-c", code, server.url("/probe")]
+        res = process.run(argv, timeout=30)
+        assert res.returncode == 7
+        assert not server.touched
+
+
+def _leaky_documents(folder: Path, url) -> list[Path]:  # noqa: ANN001
+    import odf_samples as s  # noqa: PLC0415
+
+    ws = 'of:=COM.MICROSOFT.WEBSERVICE("{}")'.format(url("/webservice"))
+    ext = "of:=['{}'#$Sheet1.A1]".format(url("/external.ods"))
+    return [
+        s.odt_with_remote_image(folder / "連結圖片.odt", url("/image.png")),
+        s.ods_with_formula(folder / "網路服務.ods", ws, link_update_mode=2),
+        s.ods_with_formula(folder / "外部參照.ods", ext, link_update_mode=2),
+        s.ods_with_linked_sheet(folder / "連結工作表.ods", url("/linked.ods"), 2),
+    ]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("sandbox", [False, True], ids=["只靠設定", "加上bwrap"])
+def test_real_libreoffice_never_touches_the_network(tmp_path: Path, monkeypatch, sandbox: bool):
+    """經過共用的 core.soffice：兩種模式下都不能有任何連線。"""
+    if backends.find("soffice") is None:
+        pytest.skip("沒有安裝 LibreOffice")
+    if sandbox and not _sandbox(tmp_path):
+        pytest.skip("這台電腦不能用 bwrap")
+    if not sandbox:
+        monkeypatch.setattr(soffice, "sandbox_prefix", lambda _writable: [])
+    from local_http import RecordingServer  # noqa: PLC0415
+
+    with RecordingServer() as server:
+        for doc in _leaky_documents(tmp_path, server.url):
+            pdf = office.convert_to_pdf(doc)
+            assert pdf.read_bytes().startswith(b"%PDF"), doc.name
+        assert server.requests == []
+        assert server.connections == 0
+
+
+@pytest.mark.slow
+def test_control_plain_profile_does_fetch_linked_image(tmp_path: Path):
+    """對照組：沒有安全設定的設定檔、不隔離時真的會去抓圖片（證明測試抓得到問題）。"""
+    if backends.find("soffice") is None:
+        pytest.skip("沒有安裝 LibreOffice")
+    import odf_samples as s  # noqa: PLC0415
+    from local_http import RecordingServer  # noqa: PLC0415
+
+    with RecordingServer() as server:
+        doc = s.odt_with_remote_image(tmp_path / "連結.odt", server.url("/image.png"))
+        profile, outdir = tmp_path / "plain-profile", tmp_path / "out"
+        (profile / "user").mkdir(parents=True)
+        outdir.mkdir()
+        argv = soffice.arguments(doc, "pdf", outdir, profile, None)
+        process.run(argv, timeout=60)
+        assert server.touched

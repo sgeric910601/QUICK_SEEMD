@@ -23,6 +23,7 @@ QS_APP_ICON_SRC=$QS_REPO_DIR/Design/AppIcon-1024.png
 QS_SYMBOLIC_SRC=$QS_DATA_SRC/icons/$QS_SYMBOLIC_NAME.svg
 QS_ICON_SIZES=(16 24 32 48 64 128 256 512)
 QS_NEMO_HINT="請執行 nemo -q 後重新打開 Nemo，右鍵選單才會出現"
+QS_AUTOSTART_MARKER="X-QuickSeemd-Autostart=true" # 與 core/autostart.py 的 MARKER 相同
 
 # 外部程式一律用固定的絕對路徑
 QS_PYTHON=/usr/bin/python3
@@ -160,12 +161,22 @@ with Image.open(source) as img:
 PY
 }
 
+# 背景程式與預覽服務沒有檔案參數，先切到 /；命令列要保留目前資料夾（檔案可以寫相對路徑）
+launcher_chdir() {
+  if [ "$1" = quickseemd ]; then
+    printf '%s' "# 命令列：保留目前的資料夾，相對路徑的檔案參數才有效"
+  else
+    printf '%s' "cd / || exit 1"
+  fi
+}
+
 plan_rendered() {
   local name lib_q stage=$QS_STAGE
   mkdir -p -- "$stage/bin" "$stage/entries"
   printf -v lib_q '%q' "$QS_LIB"
   for name in "${QS_LAUNCHERS[@]}"; do
-    render "$QS_TEMPLATES/launcher.in" "$stage/bin/$name" "LIB=$lib_q" "MODULE=${QS_MODULE_OF[$name]}"
+    render "$QS_TEMPLATES/launcher.in" "$stage/bin/$name" "LIB=$lib_q" \
+      "MODULE=${QS_MODULE_OF[$name]}" "CHDIR=$(launcher_chdir "$name")"
     plan_add "$stage/bin/$name" "$QS_BIN_DIR/$name" 755
   done
   local app agent preview
@@ -223,7 +234,8 @@ decide_autostart() {
   fi
 }
 
-# 背景程式自己建立的自動啟動檔（名稱是 QUICK_SEEMD、執行背景程式）：當成自己的檔案沿用
+# 背景程式自己建立的自動啟動檔（有共用模組 core.autostart 的標記行，或名稱是 QUICK_SEEMD
+# 而且執行背景程式）：當成自己的檔案沿用
 adopt_app_autostart() {
   local path
   path=$(qs_autostart_path)
@@ -231,8 +243,9 @@ adopt_app_autostart() {
     [ -L "$path" ]; then
     return 0
   fi
-  if grep -qx 'Name=QUICK_SEEMD' -- "$path" &&
-    grep -Eq '^Exec=.*quickseemd(-agent|\.agent)' -- "$path"; then
+  if grep -qx "$QS_AUTOSTART_MARKER" -- "$path" ||
+    { grep -qx 'Name=QUICK_SEEMD' -- "$path" &&
+      grep -Eq '^Exec=.*quickseemd(-agent|\.agent)' -- "$path"; }; then
     QS_OLD["$path"]=1
     qs_say "▸ 沿用 QUICK_SEEMD 背景程式建立的自動啟動檔"
   fi

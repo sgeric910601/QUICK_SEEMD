@@ -192,3 +192,27 @@ def test_autostart_created_by_the_app_is_adopted(home: Home):
     res = run(home, INSTALL)
     assert res.returncode == 0, res.stdout + res.stderr
     assert str(autostart) in home.manifest_entries()
+
+
+def test_autostart_with_shared_marker_is_adopted(home: Home):
+    """core.autostart 寫的檔案帶有標記行：就算 Exec 是別的寫法也算我們的。"""
+    autostart = home.config / "autostart" / "dev.quickseemd.Agent.desktop"
+    assert run(home, INSTALL, "--no-autostart").returncode == 0
+    autostart.parent.mkdir(parents=True, exist_ok=True)
+    autostart.write_text(
+        "[Desktop Entry]\nType=Application\nName=QUICK_SEEMD\n"
+        "Exec=/usr/bin/env QS=1 /opt/啟動\nX-QuickSeemd-Autostart=true\n",
+        "utf-8",
+    )
+    res = run(home, INSTALL)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "X-QuickSeemd-Autostart=true" in autostart.read_text("utf-8")
+
+
+def test_installer_marker_matches_shared_module():
+    from quickseemd.core import autostart  # noqa: PLC0415
+
+    text = INSTALL.read_text("utf-8")
+    assert f'QS_AUTOSTART_MARKER="{autostart.MARKER}"' in text
+    template = INSTALL.parent / "data" / "templates" / "dev.quickseemd.Agent.autostart.in"
+    assert autostart.MARKER in template.read_text("utf-8")

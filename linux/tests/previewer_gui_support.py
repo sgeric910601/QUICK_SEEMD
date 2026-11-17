@@ -37,6 +37,7 @@ BUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Config
 @dataclass(frozen=True)
 class Session:
     root: Path
+    coverage: bool = True  # 子程序要不要記錄覆蓋率（跑裝好的那份程式時沒有意義，關掉）
 
     @property
     def home(self) -> Path:
@@ -82,12 +83,13 @@ class Session:
             "PYTHONPATH": str(conftest.LINUX_DIR),
         }
         # 讓預覽服務在子程序裡也記錄覆蓋率（pytest-cov 透過這些變數設定）
-        env.update({k: v for k, v in os.environ.items() if k.startswith("COV_CORE_")})
+        if self.coverage:
+            env.update({k: v for k, v in os.environ.items() if k.startswith("COV_CORE_")})
         return env
 
 
-def make_session(root: Path) -> Session:
-    s = Session(root)
+def make_session(root: Path, coverage: bool = True) -> Session:
+    s = Session(root, coverage)
     for d in (s.config, s.data, s.home / ".cache", s.services, s.shots):
         d.mkdir(parents=True, exist_ok=True)
     s.runtime.mkdir(mode=0o700)
@@ -102,7 +104,7 @@ def write_service(s: Session, name: str, exec_line: str) -> None:
 
 def run_driver(s: Session, scenario: str, cfg: dict, timeout: int = 300) -> dict:
     report = s.root / f"report-{scenario}.json"
-    cfg = dict(cfg, outdir=str(s.shots), report=str(report), bus_config=str(s.bus_config))
+    cfg = dict(cfg, outdir=str(s.shots), report=str(report))
     cfg_path = s.root / f"config-{scenario}.json"
     cfg_path.write_text(json.dumps(cfg, ensure_ascii=False), "utf-8")
     log = s.root / f"driver-{scenario}.log"

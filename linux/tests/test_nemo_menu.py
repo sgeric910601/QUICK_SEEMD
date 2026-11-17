@@ -217,9 +217,10 @@ def test_missing_mime_counts_as_unknown(ext):
 
 
 class FakeConnection:
-    def __init__(self, fail_times: int = 0):
+    def __init__(self, fail_times: int = 0, error=None):
         self.fail_times = fail_times
         self.calls: list[tuple] = []
+        self.error = error or (Gio.dbus_error_quark(), Gio.DBusError.SERVICE_UNKNOWN)
 
     def call(self, name, path, iface, method, params, reply, flags, timeout, cancel, callback):
         self.calls.append((name, path, iface, method, params.unpack(), flags))
@@ -227,9 +228,8 @@ class FakeConnection:
 
     def call_finish(self, result):
         if len(self.calls) <= self.fail_times:
-            raise GLib.Error.new_literal(
-                Gio.dbus_error_quark(), "沒有回應", Gio.DBusError.SERVICE_UNKNOWN
-            )
+            domain, code = self.error
+            raise GLib.Error.new_literal(domain, "呼叫失敗", code)
         return GLib.Variant("()", ())
 
 
@@ -297,10 +297,40 @@ def test_second_failure_gives_up(ext, monkeypatch):
     assert len(env.spawned) == 1
 
 
-def test_no_bus_falls_back_to_spawn(ext, monkeypatch):
-    env = FakeEnv(None)
+@pytest.mark.parametrize(
+    "code",
+    [Gio.DBusError.SERVICE_UNKNOWN, Gio.DBusError.NAME_HAS_NO_OWNER, Gio.DBusError.NO_REPLY],
+)
+def test_agent_missing_errors_respawn(ext, monkeypatch, code):
+    env = FakeEnv(FakeConnection(fail_times=1, error=(Gio.dbus_error_quark(), code)))
     _activate(ext, monkeypatch, env, "加上頁碼", [FakeFileInfo("/tmp/a.pdf", "application/pdf")])
     assert len(env.spawned) == 1
+    assert len(env.conn.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        (Gio.dbus_error_quark(), Gio.DBusError.ACCESS_DENIED),
+        (Gio.dbus_error_quark(), Gio.DBusError.UNKNOWN_METHOD),
+        (Gio.dbus_error_quark(), Gio.DBusError.INVALID_ARGS),
+        (Gio.dbus_error_quark(), Gio.DBusError.FAILED),
+        (Gio.io_error_quark(), Gio.IOErrorEnum.TIMED_OUT),
+    ],
+)
+def test_other_errors_do_not_respawn(ext, monkeypatch, error):
+    """背景程式在、但回報錯誤（或其他錯誤）：不能再開一份背景程式。"""
+    env = FakeEnv(FakeConnection(fail_times=1, error=error))
+    _activate(ext, monkeypatch, env, "加上頁碼", [FakeFileInfo("/tmp/a.pdf", "application/pdf")])
+    assert env.spawned == []
+    assert len(env.conn.calls) == 1
+
+
+def test_no_bus_does_not_spawn(ext, monkeypatch):
+    """連不上工作階段的 D-Bus：開背景程式也沒用（它也連不上），只記錄。"""
+    env = FakeEnv(None)
+    _activate(ext, monkeypatch, env, "加上頁碼", [FakeFileInfo("/tmp/a.pdf", "application/pdf")])
+    assert env.spawned == []
 
 
 def test_more_tools_opens_app(ext, monkeypatch):

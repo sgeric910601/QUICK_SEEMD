@@ -1,7 +1,9 @@
 """Office 文件預覽：用 LibreOffice（無介面模式）轉成 PDF，放在快取資料夾。
 
 - 快取檔名：sha1(路徑, 修改時間, 大小).pdf，檔案改過就會重新轉換。
-- 每次轉換用全新的暫存資料夾（LibreOffice 設定檔與輸出資料夾都是這次專用），結束後清掉。
+- 轉檔交給共用的 core.soffice：全新的設定檔（不抓連結的遠端資源、不更新連結、不重算、
+  不執行巨集）、能用 bwrap 時放進沒有網路的隔離環境、同一時間只跑一個。
+- 每次轉換用全新的暫存資料夾，結束後清掉。
 - 轉好的 PDF 以「獨佔建立」放進快取（硬連結），絕不覆蓋已存在的檔案；原始檔完全不動。
 """
 
@@ -13,7 +15,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from ..core import backends, errors, naming, process
+from ..core import backends, errors, naming, soffice
 
 log = logging.getLogger(__name__)
 
@@ -38,29 +40,6 @@ def cached_pdf_path(path: Path) -> Path:
     return cache_folder() / f"{cache_key(path)}.pdf"
 
 
-def _arguments(soffice: str, src: Path, profile: Path, outdir: Path) -> list[str]:
-    return [
-        soffice,
-        f"-env:UserInstallation={profile.as_uri()}",
-        "--headless",
-        "--invisible",
-        "--norestore",
-        "--nologo",
-        "--nodefault",
-        "--nolockcheck",
-        "--convert-to",
-        "pdf",
-        "--outdir",
-        str(outdir),
-        str(src),
-    ]
-
-
-def _produced_pdf(outdir: Path) -> Path | None:
-    found = [p for p in outdir.iterdir() if p.suffix.lower() == ".pdf" and p.is_file()]
-    return found[0] if len(found) == 1 else None
-
-
 def _commit(produced: Path, target: Path) -> None:
     """獨佔建立快取檔；已經有了（別的轉換剛好完成）就沿用。"""
     try:
@@ -70,16 +49,9 @@ def _commit(produced: Path, target: Path) -> None:
 
 
 def _convert_in(work: Path, src: Path, target: Path) -> None:
-    soffice = backends.require("soffice")
-    profile = work / "profile"
-    outdir = work / "out"
-    profile.mkdir()
-    outdir.mkdir()
-    res = process.run(_arguments(soffice, src, profile, outdir), timeout=CONVERT_TIMEOUT)
-    produced = _produced_pdf(outdir)
-    if res.returncode != 0 or produced is None:
-        detail = process.last_lines(res.stderr) or process.last_lines(res.stdout)
-        raise errors.tool_failed(TOOL_TITLE, detail)
+    produced = soffice.convert(src, "pdf", work, timeout=CONVERT_TIMEOUT)
+    if produced.suffix.lower() != ".pdf":
+        raise errors.tool_failed(TOOL_TITLE, "沒有產生 PDF。")
     _commit(produced, target)
 
 

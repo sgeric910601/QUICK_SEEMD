@@ -3,7 +3,11 @@
 - 每次轉檔都用全新的設定檔資料夾（-env:UserInstallation），不碰使用者自己的 LibreOffice；
   設定檔預先寫好安全設定：封鎖文件裡指向外部的連結（不會去抓網路上的圖片）、不更新連結、
   開檔不重新計算（WEBSERVICE 不會連網）、停用巨集。
-- 有 bubblewrap 時再加一層隔離：沒有網路、系統唯讀，只有這次的暫存資料夾可寫。
+- 有 bubblewrap 時再加一層隔離：沒有網路、系統唯讀，只有這次的暫存資料夾可寫；
+  /tmp、/var/tmp、/run 換成私有的空白資料夾（看不到桌面工作階段的 D-Bus、X11 檔案 socket），
+  暫存資料夾與輸入檔在這之後才掛上，放在 /tmp 底下也看得到。
+- 不論有沒有 bubblewrap，都拿掉連到桌面工作階段的環境變數（SESSION_VARIABLES），
+  LibreOffice 連不上工作階段的 D-Bus 或畫面。
 - 用檔案鎖讓同一時間只有一個轉檔在跑；等鎖、執行時都可以取消，執行有逾時。
 - 輸出放進全新的暫存資料夾，確認真的有產生檔案才回傳。
 
@@ -99,19 +103,44 @@ _sandbox_lock = threading.Lock()
 _sandbox_ok: dict[str, bool] = {}
 
 
+# 連到桌面工作階段（D-Bus、畫面）的環境變數：LibreOffice 一律拿不到
+SESSION_VARIABLES = (
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+)
+ENV = "/usr/bin/env"
+
+
+def clean_env_prefix() -> list[str]:
+    """沒有 bwrap 時用的前綴：用 env -u 拿掉工作階段的環境變數再執行。"""
+    args = [ENV]
+    for name in SESSION_VARIABLES:
+        args += ["-u", name]
+    return args
+
+
 def _bwrap_base(bwrap: str, writable: Path) -> list[str]:
     root = str(Path(writable).resolve())
-    return [
-        bwrap,
-        "--ro-bind", "/", "/",
-        "--dev", "/dev",
-        "--proc", "/proc",
-        "--tmpfs", "/var/tmp",  # LibreOffice 的單一執行個體管道需要可寫的 /tmp 或 /var/tmp
-        "--bind", root, root,
-        "--unshare-net",
-        "--die-with-parent",
-        "--",
-    ]  # fmt: skip
+    args = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+    # 私有的空白暫存區與 /run（LibreOffice 的單一執行個體管道需要可寫的 /tmp 或 /var/tmp）
+    args += ["--tmpfs", "/tmp", "--tmpfs", "/var/tmp", "--tmpfs", "/run"]
+    args += ["--bind", root, root]  # 在 tmpfs 之後：暫存資料夾在 /tmp 底下也看得到
+    for name in SESSION_VARIABLES:
+        args += ["--unsetenv", name]
+    return args + ["--unshare-net", "--die-with-parent", "--"]
+
+
+def _with_readable(prefix: list[str], paths: list[Path]) -> list[str]:
+    """在 bwrap 參數的「--」前面唯讀掛入這些路徑（輸入檔可能在被遮住的 /tmp、/run 底下）。"""
+    if not prefix:
+        return prefix
+    extra: list[str] = []
+    for path in paths:
+        extra += ["--ro-bind", str(path), str(path)]
+    return prefix[:-1] + extra + prefix[-1:]
 
 
 def sandbox_prefix(writable: Path) -> list[str]:
@@ -163,7 +192,9 @@ def convert(
     profile = make_profile(scratch)
     tmp = scratch / "tmp"
     tmp.mkdir()
-    args = sandbox_prefix(scratch) + arguments(Path(src), filter_spec, out_dir, profile, infilter)
+    sandbox = _with_readable(sandbox_prefix(scratch), [Path(src).resolve()])
+    prefix = sandbox or clean_env_prefix()  # 沒有 bwrap 也要拿掉工作階段的環境變數
+    args = prefix + arguments(Path(src), filter_spec, out_dir, profile, infilter)
     env = {"SAL_USE_VCLPLUGIN": "svp", "HOME": str(scratch), "TMPDIR": str(tmp)}
     with lock(cancel):
         process.run_checked(args, "LibreOffice", cancel=cancel, timeout=timeout, env=env)

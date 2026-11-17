@@ -22,7 +22,8 @@ pytestmark = [pytest.mark.gui, pytest.mark.slow]
 
 @pytest.fixture(scope="module")
 def report(tmp_path_factory: pytest.TempPathFactory) -> dict:
-    s = make_session(tmp_path_factory.mktemp("nemo"))
+    # 這裡跑的是裝好的那份程式（不是原始碼），子程序不記錄覆蓋率
+    s = make_session(tmp_path_factory.mktemp("nemo"), coverage=False)
     env = s.env()
     env["TMPDIR"] = str(s.root)
     res = subprocess.run(
@@ -56,7 +57,9 @@ def report(tmp_path_factory: pytest.TempPathFactory) -> dict:
 
 
 def test_nemo_started(report):
+    assert report["wm_ready"]
     assert report["nemo_started"]
+    assert report["nemo_focused"]
 
 
 def test_space_opens_preview_on_top_of_nemo(report):
@@ -71,7 +74,9 @@ def test_space_again_closes_preview(report):
 
 
 def test_context_menu_shows_quickseemd(report):
+    assert report["refocused"]  # 預覽關掉後焦點回到 Nemo
     assert report["menu_item_found"], report.get("menu_shot")
+    assert report["submenu_opened"]
 
 
 def test_menu_action_reaches_agent(report):

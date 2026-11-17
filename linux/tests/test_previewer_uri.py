@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from gi.repository import Gio, GLib
 
-from quickseemd.previewer.uri import MAX_URI_LENGTH, Target, TargetKind, resolve
+from quickseemd.previewer.uri import ALLOWED_SCHEMES, MAX_URI_LENGTH, Target, TargetKind, resolve
 
 
 class FakeInfo:
@@ -120,26 +120,37 @@ def test_recent_uri_uses_target_uri(tmp_path: Path):
     assert t.kind is TargetKind.FILE and t.path == real
 
 
-def test_sftp_with_fuse_path(tmp_path: Path):
-    real = tmp_path / "遠端.txt"
-    real.write_text("x", "utf-8")
-    fake = FakeFile(path=str(real))
-    t = resolve("sftp://host/home/u/遠端.txt", file_for_uri=_factory(fake))
-    assert t.kind is TargetKind.FILE and t.path == real
+def _never_called(uri: str):
+    raise AssertionError(f"不應該碰這個網址：{uri}")
 
 
-def test_sftp_without_local_path_is_remote():
-    fake = FakeFile(path=None, target=None, basename="報告.docx")
-    t = resolve("sftp://host/報告.docx", file_for_uri=_factory(fake))
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "sftp://host/home/u/遠端.txt",
+        "http://127.0.0.1:9/a.txt",
+        "https://example.com/報告.pdf",
+        "smb://server/share/a.docx",
+        "ftp://host/x",
+        "dav://host/x",
+        "network:///",
+    ],
+)
+def test_other_schemes_are_refused_without_touching(uri: str):
+    t = resolve(uri, file_for_uri=_never_called)
     assert t.kind is TargetKind.REMOTE
     assert t.path is None
-    assert t.name == "報告.docx"
+    assert t.name
 
 
-def test_query_error_is_remote():
-    err = GLib.Error.new_literal(Gio.io_error_quark(), "無法連線", Gio.IOErrorEnum.FAILED)
-    fake = FakeFile(error=err)
-    assert resolve("smb://x/y", file_for_uri=_factory(fake)).kind is TargetKind.REMOTE
+def test_scheme_check_ignores_case(tmp_path: Path):
+    f = tmp_path / "a.txt"
+    f.write_text("x", "utf-8")
+    assert resolve("FILE://" + str(f)).kind is TargetKind.FILE
+
+
+def test_allowed_schemes():
+    assert ALLOWED_SCHEMES == frozenset({"file", "trash", "recent"})
 
 
 def test_target_uri_that_is_not_local_is_remote():
@@ -164,4 +175,4 @@ def test_local_uri_property(tmp_path: Path):
     f.write_text("x", "utf-8")
     t = resolve(f.as_uri())
     assert t.local_uri == f.as_uri()
-    assert Target(TargetKind.REMOTE, "sftp://h/a", "a").local_uri == "sftp://h/a"
+    assert Target(TargetKind.REMOTE, "trash:///a", "a").local_uri == "trash:///a"

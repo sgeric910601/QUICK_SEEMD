@@ -79,7 +79,13 @@ def test_launchers(installed, name: str, module: str):
     assert stat.S_IMODE(launcher.stat().st_mode) == 0o755
     assert text.startswith("#!/bin/bash\n")
     assert f"export PYTHONPATH={h.lib}\n" in text
-    assert f'exec /usr/bin/python3 -s -m {module} "$@"\n' in text
+    # -P：目前資料夾不放進模組搜尋路徑，不會被同名的資料夾頂替
+    assert f'exec /usr/bin/python3 -P -s -m {module} "$@"\n' in text
+    # 服務類（沒有檔案參數）先切到 /；命令列保留目前資料夾，相對路徑的檔案參數才有效
+    if name == "quickseemd":
+        assert "cd /" not in text
+    else:
+        assert text.index("cd / || exit 1\n") < text.index("exec ")
 
 
 def test_launcher_runs_installed_package(installed):
@@ -93,6 +99,28 @@ def test_launcher_runs_installed_package(installed):
         check=False,
     )
     assert res.returncode == 0, res.stderr
+
+
+def test_launcher_ignores_modules_in_current_folder(installed, tmp_path: Path):
+    """在放了同名假套件的資料夾裡執行，也只會載入裝好的程式。"""
+    h, _res = installed
+    trap = tmp_path / "惡意資料夾"
+    fake = trap / "quickseemd"
+    fake.mkdir(parents=True)
+    marker = tmp_path / "被載入了"
+    (fake / "__init__.py").write_text(f"open({str(marker)!r}, 'w').close()\n", "utf-8")
+    (fake / "__main__.py").write_text(f"open({str(marker)!r}, 'w').close()\n", "utf-8")
+    res = subprocess.run(
+        [str(h.bin / "quickseemd"), "tools", "--list"],
+        cwd=trap,
+        capture_output=True,
+        text=True,
+        env=h.env,
+        timeout=60,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr
+    assert not marker.exists()
 
 
 def test_desktop_entry(installed):
@@ -162,7 +190,9 @@ def test_manifest_lists_every_installed_file(installed):
     assert len(entries) == len(set(entries))
     listed = {Path(e) for e in entries}
     assert all(p.is_absolute() and p.is_file() for p in listed)
-    created = all_files(h.home) - {h.manifest, h.hicolor / "icon-theme.cache"}
+    # Python 執行時產生的 __pycache__ 不算安裝的檔案（解除安裝會一併清掉）
+    runtime = {p for p in all_files(h.home) if "__pycache__" in p.parts}
+    created = all_files(h.home) - runtime - {h.manifest, h.hicolor / "icon-theme.cache"}
     assert created == listed
 
 

@@ -9,7 +9,8 @@ QUICK_SEEMD 的程式在 ~/.local/share/quickseemd/lib（安裝程式放的）�
   最後是分隔線＋「更多工具與選項…」。
 - Nemo 把底線當成快速鍵記號，所有文字裡的底線都要寫成兩個。
 - 點了動作：非同步呼叫背景程式 dev.quickseemd.Agent.RunAction（需要時 D-Bus 自動啟動）；
-  失敗就自己啟動 ~/.local/bin/quickseemd-agent，等它上線後再試一次。
+  只有「背景程式不在」的錯誤（服務不存在、名稱沒有擁有者、沒有回應）才自己啟動
+  ~/.local/bin/quickseemd-agent，等它上線後再試一次；其他錯誤只記錄。
 - 「更多工具與選項…」：啟動 ~/.local/bin/quickseemd open 檔案…（不等它結束）。
 
 這個檔案只載入 GObject、Gio、GLib、Nemo 與不含介面的 quickseemd.core 模組
@@ -143,19 +144,35 @@ def _wait_for_name(name: str, appeared: Callable[[], None], timeout_ms: int) -> 
 # ------------------------------------------------------------------ 執行動作
 
 
+# 只有這些錯誤代表「背景程式不在」，才值得自己啟動它再試一次；
+# 其他錯誤（拒絕存取、參數不對、背景程式回報失敗…）再開一份也沒用
+_AGENT_MISSING = (
+    Gio.DBusError.SERVICE_UNKNOWN,
+    Gio.DBusError.NAME_HAS_NO_OWNER,
+    Gio.DBusError.NO_REPLY,
+)
+
+
+def agent_missing(exc: GLib.Error) -> bool:
+    return any(exc.matches(Gio.dbus_error_quark(), code) for code in _AGENT_MISSING)
+
+
 class _AgentCall:
-    """呼叫背景程式的 RunAction；第一次失敗就啟動背景程式並重試一次。"""
+    """呼叫背景程式的 RunAction；背景程式不在時自己啟動它，並重試一次。"""
 
     def __init__(self, action_id: str, paths: list[str]) -> None:
         self._params = GLib.Variant("(sas)", (action_id, paths))
         self._action_id = action_id
 
     def start(self) -> None:
-        _get_bus(lambda conn, _err: self._call(conn, retry=False))
+        _get_bus(lambda conn, err: self._call(conn, err, retry=False))
 
-    def _call(self, conn: Gio.DBusConnection | None, *, retry: bool) -> None:
+    def _call(
+        self, conn: Gio.DBusConnection | None, err: GLib.Error | None, *, retry: bool
+    ) -> None:
         if conn is None:
-            self._failed("沒有 D-Bus 連線", retry)
+            reason = err.message if err is not None else "沒有 D-Bus 連線"
+            log.warning("無法執行 %s：%s", self._action_id, reason)
             return
         conn.call(
             ipc.AGENT_BUS_NAME,
@@ -174,17 +191,17 @@ class _AgentCall:
         try:
             conn.call_finish(result)
         except GLib.Error as exc:
-            self._failed(exc.message, retry)
+            self._failed(exc, retry)
 
-    def _failed(self, reason: str, retry: bool) -> None:
-        if retry:
-            log.warning("無法執行 %s：%s", self._action_id, reason)
+    def _failed(self, exc: GLib.Error, retry: bool) -> None:
+        if retry or not agent_missing(exc):
+            log.warning("無法執行 %s：%s", self._action_id, exc.message)
             return
         if _spawn([_bin(AGENT_BIN)]):
             _wait_for_name(ipc.AGENT_BUS_NAME, self._retry, AGENT_START_TIMEOUT_MS)
 
     def _retry(self) -> None:
-        _get_bus(lambda conn, _err: self._call(conn, retry=True))
+        _get_bus(lambda conn, err: self._call(conn, err, retry=True))
 
 
 def _on_action(_item: Any, action_id: str, paths: list[str]) -> None:
