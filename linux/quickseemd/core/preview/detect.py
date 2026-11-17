@@ -231,7 +231,8 @@ def _shebang(text: str) -> Language | None:
     return BY_ID.get(lang_id) if lang_id else None
 
 
-def _is_a(mime: str, parent: str) -> bool:
+def is_a(mime: str, parent: str) -> bool:
+    """Gio 的類型繼承判斷（相同也算）。"""
     if mime == parent:
         return True
     try:
@@ -246,7 +247,7 @@ def by_mime(mime: str | None) -> Language | None:
     if not mime:
         return None
     for parents, lang_id in MIME_CHECKS:
-        if any(_is_a(mime, p) for p in parents):
+        if any(is_a(mime, p) for p in parents):
             return BY_ID[lang_id]
     if mime == LOG_MIME:
         return BY_ID["log"]
