@@ -9,6 +9,7 @@ from . import (
     convert,
     crop,
     make_icon,
+    ocr,
     remove_bg,
     resize,
     rotate,
@@ -17,6 +18,7 @@ from . import (
     watermark,
 )
 
+# 順序照原版（registry 也會依 ORDER 排序）
 TOOLS: list[ToolDefinition] = [
     convert.TOOL,
     compress.TOOL,
@@ -26,6 +28,7 @@ TOOLS: list[ToolDefinition] = [
     remove_bg.TOOL,
     watermark.TOOL,
     blur_faces.TOOL,
+    ocr.TOOL,
     strip_metadata.TOOL,
     upscale.TOOL,
     make_icon.TOOL,
