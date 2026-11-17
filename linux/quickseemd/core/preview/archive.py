@@ -4,15 +4,20 @@
 Linux 版補充（惡意檔案不能拖垮預覽）：
 - 處理的紀錄數有上限（MAX_ENTRIES 的 10 倍），大量中繼資料不會拖住預覽。
 - 每個路徑最多保留 MAX_PATH_CHARS 個字元（tar 的長檔名紀錄可達 1 MB，壓縮後卻很小）。
-- 解壓縮一律分段進行，輸出有上限。
+- 解壓縮一律分段進行：列清單最多解開 256 MiB、單檔內容預覽最多 2 MiB，並且都有時間上限；
+  長檔名／PAX 資料整個壓縮檔合計最多 8 MiB。超過時只列出前面的部分（partial）。
+- 異常的大小欄位不會造成例外：跳過的長度不超過檔尾，數字欄位有位數上限。
+- 原版給沙盒裡的預覽擴充用 4 GiB 上限；這裡的預覽直接在桌面上跑，所以收緊。
 """
 
 from __future__ import annotations
 
 import logging
 import lzma
+import os
 import re
 import struct
+import time
 import zlib
 from collections.abc import Iterator
 from contextlib import closing
@@ -30,11 +35,14 @@ RECORD_FACTOR = 10
 ZIP_TAIL = 65_557
 MAX_CENTRAL_DIR = 64 * 1024 * 1024
 META_LIMIT = 1_000_000
-MAX_TAR_OUTPUT = 4 * 1024 * 1024 * 1024
+META_TOTAL_LIMIT = 8 * 1024 * 1024
+MAX_TAR_OUTPUT = 256 * 1024 * 1024
+LISTING_SECONDS = 3.0
+INNER_SECONDS = 2.0
 CHUNK = 256 * 1024
 TAR_READ = 64 * 1024
 _CD_RECORD = struct.Struct("<4sHHHHHHIIIHHHHHII")
-_INT = re.compile(rb"[+-]?[0-9]+")
+_DIGITS = re.compile(rb"[0-9]{1,20}")
 _FLOAT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
 
 
@@ -56,6 +64,7 @@ class Listing:
     truncated: bool = False
     hidden_mac_metadata: int = 0
     comment: str | None = None
+    partial: bool = False  # 太大或太久：只列出前面的部分（Linux 版補充）
 
 
 def _clip(path: str) -> str:
@@ -156,9 +165,12 @@ def _extras(cd: bytes, e: int, length: int, state: list) -> None:
         e = d + ln
 
 
-def _zip_entries(cd: bytes, total: int, listing: Listing) -> None:
+def _zip_entries(cd: bytes, total: int, listing: Listing, deadline: float) -> None:
     o = count = 0
     while o + 46 <= len(cd) and count < total:
+        if count % 1024 == 0 and time.monotonic() > deadline:
+            listing.partial = True
+            break
         rec = _CD_RECORD.unpack_from(cd, o)
         if rec[0] != b"PK\x01\x02":
             break
@@ -209,10 +221,10 @@ def read_zip(path: Path, size: int) -> Listing | None:
             values = (u16(tail, eocd + 10), u32(tail, eocd + 12), u32(tail, eocd + 16))
             total, cd_size, cd_offset = _zip64(fh, tail, eocd, values)
             cd = _read_at(fh, cd_offset, min(cd_size, MAX_CENTRAL_DIR))
-    except OSError:
+    except (OSError, OverflowError, ValueError):
         log.debug("讀不到 ZIP：%s", path, exc_info=True)
         return None
-    _zip_entries(cd, total, listing)
+    _zip_entries(cd, total, listing, _listing_deadline())
     return listing
 
 
@@ -246,19 +258,26 @@ def looks_like_tar(d: bytes) -> bool:
 
 
 class TarParser:
-    """串流解析（可以接在解壓縮後面）：GNU 長檔名、PAX、ustar 前綴、base-256。"""
+    """串流解析（可以接在解壓縮後面）：GNU 長檔名、PAX、ustar 前綴、base-256。
 
-    def __init__(self) -> None:
+    Linux 版補充：整個壓縮檔的長檔名／PAX 資料合計最多 META_TOTAL_LIMIT 位元組，
+    超過期限（deadline）也停止；這兩種情況都標成 partial（只列出前面的部分）。
+    """
+
+    def __init__(self, deadline: float | None = None) -> None:
         self.entries: list[Entry] = []
         self.hidden = 0
         self.done = False
         self.invalid = False
         self.truncated = False
+        self.partial = False
         self.skip = 0
+        self.deadline = deadline
         self._buf = bytearray()
         self._collect = 0
         self._collect_kind = 0
         self._collect_pad = 0
+        self._meta_total = 0
         self._long_name: str | None = None
         self._pax: dict[str, object] = {}
         self._zero_blocks = 0
@@ -266,6 +285,9 @@ class TarParser:
 
     def consume_skip(self, n: int) -> None:
         self.skip = max(0, self.skip - n)
+
+    def stop_partial(self) -> None:
+        self.partial = self.done = True
 
     def feed(self, data: bytes) -> None:
         mv = memoryview(data)
@@ -291,7 +313,13 @@ class TarParser:
                 if len(self._buf) == 512:
                     header = bytes(self._buf)
                     self._buf = bytearray()
-                    self._process_header(header)
+                    self._next_header(header)
+
+    def _next_header(self, h: bytes) -> None:
+        if self.deadline is not None and time.monotonic() > self.deadline:
+            self.stop_partial()
+            return
+        self._process_header(h)
 
     def _checksum_ok(self, h: bytes) -> bool:
         return sum(h) - sum(h[148:156]) + 8 * 32 == parse_number(h, 148, 8)
@@ -315,6 +343,10 @@ class TarParser:
         pad = (512 - size % 512) % 512
         if typ in (76, 120):  # 'L' GNU 長檔名、'x' PAX
             self._collect = min(size, META_LIMIT)
+            self._meta_total += self._collect
+            if self._meta_total > META_TOTAL_LIMIT:
+                self.stop_partial()
+                return
             self._collect_kind = typ
             self._collect_pad = pad + (size - self._collect)
             if self._collect == 0:
@@ -350,7 +382,7 @@ class TarParser:
         if is_mac_metadata(name):
             self.hidden += 1
             return
-        when = from_timestamp(float(mtime))  # type: ignore[arg-type]
+        when = from_timestamp(float(mtime)) if _small(mtime) else None  # type: ignore[arg-type]
         self.entries.append(
             Entry(_clip(name), is_dir, None if is_dir else real_size, None, when, is_link=typ == 50)
         )
@@ -366,7 +398,7 @@ class TarParser:
         while i < len(buf):
             j = buf.find(b" ", i)
             j = len(buf) if j < 0 else j
-            if not _INT.fullmatch(buf[i:j]):
+            if not _DIGITS.fullmatch(buf[i:j]):
                 break
             length = int(buf[i:j])
             if length <= 0 or i + length > len(buf):
@@ -379,31 +411,48 @@ class TarParser:
     def _pax_value(self, key: str, value: str) -> None:
         if key == "path":
             self._pax["path"] = value
-        elif key == "size" and _INT.fullmatch(value.encode()):
-            self._pax["size"] = int(value)
-        elif key == "mtime" and _FLOAT.fullmatch(value):
+        elif key == "size" and _DIGITS.fullmatch(value.encode()):
+            self._pax["size"] = int(value)  # 只接受非負、最多 20 位數
+        elif key == "mtime" and len(value) <= 32 and _FLOAT.fullmatch(value):
             self._pax["mtime"] = float(value)
+
+
+def _small(v: object) -> bool:
+    """可以安全轉成時間的數字（太大的整數轉成浮點數會出錯）。"""
+    return isinstance(v, float) or (isinstance(v, int) and abs(v) < 1 << 62)
+
+
+def _listing_deadline() -> float:
+    return time.monotonic() + LISTING_SECONDS
+
+
+def _feed_file(fh, parser: TarParser, size: int) -> None:  # noqa: ANN001
+    """依序讀檔交給解析器；要跳過的內容直接移動讀取位置（不超過檔尾）。"""
+    while not parser.done:
+        chunk = fh.read(TAR_READ)
+        if not chunk:
+            return
+        parser.feed(chunk)
+        if parser.skip > 0:
+            remaining = size - fh.tell()
+            if parser.skip >= remaining:
+                return  # 要跳過的部分超過檔尾：檔案已到結尾
+            fh.seek(parser.skip, os.SEEK_CUR)
+            parser.consume_skip(parser.skip)
 
 
 def read_tar(path: Path) -> Listing | None:
     """未壓縮的 tar；第一個檔頭的檢查碼就不對時回傳 None。"""
-    parser = TarParser()
+    parser = TarParser(_listing_deadline())
     try:
         with open(path, "rb") as fh:
-            while not parser.done:
-                chunk = fh.read(TAR_READ)
-                if not chunk:
-                    break
-                parser.feed(chunk)
-                if parser.skip > 0:
-                    fh.seek(parser.skip, 1)
-                    parser.consume_skip(parser.skip)
-    except OSError:
-        log.debug("讀不到 tar：%s", path, exc_info=True)
+            _feed_file(fh, parser, os.fstat(fh.fileno()).st_size)
+    except (OSError, OverflowError, ValueError):
+        log.debug("讀 tar 時中斷：%s", path, exc_info=True)
+        parser.partial = True
+    if parser.invalid or (parser.partial and not parser.entries and not parser.hidden):
         return None
-    if parser.invalid:
-        return None
-    return Listing("TAR", parser.entries, parser.truncated, parser.hidden)
+    return Listing("TAR", parser.entries, parser.truncated, parser.hidden, partial=parser.partial)
 
 
 # ---------------------------------------------------------------- gzip／xz
@@ -469,24 +518,37 @@ def _chunks(fh, kind: str) -> Iterator[bytes]:  # noqa: ANN001
             yield out
 
 
-def decompress(path: Path, kind: str, skip: int, max_output: int) -> Iterator[bytes]:
-    """解壓縮輸出（最多 max_output 位元組）；資料損毀時就停在那裡。"""
-    produced = 0
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(skip)
-            for out in _chunks(fh, kind):
-                yield out
-                produced += len(out)
-                if produced >= max_output:
-                    return
-    except (OSError, zlib.error, lzma.LZMAError, EOFError):
-        log.debug("解壓縮中斷：%s", path, exc_info=True)
+class Inflate:
+    """有上限的解壓縮：輸出最多 max_output 位元組、超過期限就停（stopped=True）。"""
+
+    def __init__(self, path: Path, kind: str, skip: int, max_output: int, deadline: float) -> None:
+        self.path = path
+        self.kind = kind
+        self.skip = skip
+        self.max_output = max_output
+        self.deadline = deadline
+        self.stopped = False
+
+    def chunks(self) -> Iterator[bytes]:
+        produced = 0
+        try:
+            with open(self.path, "rb") as fh:
+                fh.seek(self.skip)
+                for out in _chunks(fh, self.kind):
+                    if produced >= self.max_output or time.monotonic() > self.deadline:
+                        self.stopped = True
+                        return
+                    produced += len(out)
+                    yield out
+        except (OSError, OverflowError, ValueError, zlib.error, lzma.LZMAError, EOFError):
+            log.debug("解壓縮中斷：%s", self.path, exc_info=True)
 
 
 def decompress_head(path: Path, kind: str, skip: int, limit: int) -> bytes:
+    """解壓縮開頭最多 limit 位元組（單一 .gz／.xz 的內容預覽用）。"""
     out = bytearray()
-    with closing(decompress(path, kind, skip, limit)) as chunks:
+    stream = Inflate(path, kind, skip, limit, time.monotonic() + INNER_SECONDS)
+    with closing(stream.chunks()) as chunks:
         for chunk in chunks:
             out += chunk
             if len(out) >= limit:
@@ -495,12 +557,16 @@ def decompress_head(path: Path, kind: str, skip: int, limit: int) -> bytes:
 
 
 def read_compressed_tar(path: Path, kind: str, skip: int, fmt_name: str) -> Listing | None:
-    parser = TarParser()
-    with closing(decompress(path, kind, skip, MAX_TAR_OUTPUT)) as chunks:
+    """壓縮過的 tar：一邊解壓縮一邊解析；最多解開 MAX_TAR_OUTPUT 位元組或 LISTING_SECONDS 秒。"""
+    deadline = _listing_deadline()
+    parser = TarParser(deadline)
+    stream = Inflate(path, kind, skip, MAX_TAR_OUTPUT, deadline)
+    with closing(stream.chunks()) as chunks:
         for chunk in chunks:
             parser.feed(chunk)
             if parser.done:
                 break
     if parser.invalid or (not parser.entries and parser.hidden == 0):
         return None
-    return Listing(fmt_name, parser.entries, parser.truncated, parser.hidden)
+    partial = parser.partial or (stream.stopped and not parser.done)
+    return Listing(fmt_name, parser.entries, parser.truncated, parser.hidden, partial=partial)

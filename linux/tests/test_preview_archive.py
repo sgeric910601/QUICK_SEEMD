@@ -8,6 +8,7 @@ import lzma
 import struct
 import tarfile
 import time
+import zlib
 from datetime import datetime
 from pathlib import Path
 
@@ -369,3 +370,105 @@ def test_node_and_record_caps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     f = _write(tmp_path, "meta.zip", raw_zip(meta))
     listing = archive.read_zip(f, f.stat().st_size)
     assert listing.truncated and listing.hidden_mac_metadata < 50
+
+
+# ------------------------------------------------------------------ 解壓縮炸彈與異常大小
+
+
+def _streamed_gzip(path: Path, header: bytes, zero_mib: int) -> Path:
+    """一段一段壓縮，不會在記憶體裡放整份解壓後的資料。"""
+    comp = zlib.compressobj(9, zlib.DEFLATED, 31)  # 31：gzip 格式
+    zero = b"\x00" * (1024 * 1024)
+    with open(path, "wb") as fh:
+        fh.write(comp.compress(header))
+        for _ in range(zero_mib):
+            fh.write(comp.compress(zero))
+        fh.write(comp.flush())
+    return path
+
+
+def _tar_header(name: str, size: int) -> bytes:
+    info = tarfile.TarInfo(name)
+    info.size = size
+    return info.tobuf(tarfile.GNU_FORMAT)
+
+
+def test_tar_gz_bomb_is_bounded(tmp_path: Path) -> None:
+    size = 300 * 1024 * 1024
+    bomb = _streamed_gzip(tmp_path / "bomb.tar.gz", _tar_header("big.bin", size), 300)
+    assert bomb.stat().st_size < 2_000_000
+    start = time.perf_counter()
+    doc = engine.render(bomb)
+    assert time.perf_counter() - start < 6.0
+    assert doc.kind_label == "TAR.GZ 壓縮檔"
+    assert "壓縮檔太大，只列出前面的部分" in doc.html
+    assert "big.bin" in doc.html
+
+
+def test_listing_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(archive, "LISTING_SECONDS", 0.0)
+    f = _write(
+        tmp_path,
+        "t.tar.gz",
+        gzip.compress(_tar(tarfile.GNU_FORMAT, [_member("a.txt", data=b"x")] * 3)),
+    )
+    listing = archive.read_compressed_tar(f, "gzip", 10, "TAR.GZ")
+    assert listing is None or listing.partial
+
+
+def test_metadata_budget_across_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(archive, "META_TOTAL_LIMIT", 300_000)
+    members = [_member(f"{i}/" + "n" * 100_000, data=b"x") for i in range(10)]
+    f = _write(tmp_path, "m.tar", _tar(tarfile.GNU_FORMAT, members))
+    listing = archive.read_tar(f)
+    assert listing.partial and len(listing.entries) < 10
+
+
+@pytest.mark.parametrize(
+    "size_field",
+    [
+        b"77777777777\x00",  # 8 GiB，比檔案大很多
+        b"\xff" * 12,  # base-256，超過 64 位元
+        b"\x80" + b"\xff" * 11,
+    ],
+    ids=["octal-8gib", "base256-all-ones", "base256-huge"],
+)
+def test_absurd_size_fields_do_not_crash(tmp_path: Path, size_field: bytes) -> None:
+    header = bytearray(_tar_header("x.bin", 0))
+    header[124:136] = size_field
+    header[148:156] = b"        "
+    header[148:155] = b"%06o\x00" % sum(header)
+    data = bytes(header) + b"\x00" * 1024
+    for name, blob in (("a.tar", data), ("a.tar.gz", gzip.compress(data))):
+        f = _write(tmp_path, name, blob)
+        doc = engine.render(f)
+        assert doc.html.endswith("</body></html>")
+    listing = archive.read_tar(_write(tmp_path, "b.tar", data))
+    assert listing is not None and [e.path for e in listing.entries] == ["x.bin"]
+
+
+@pytest.mark.parametrize(
+    "value", ["-5", "9" * 5000, "1e9", ""], ids=["negative", "huge", "float", "empty"]
+)
+def test_bad_pax_sizes_are_ignored(tmp_path: Path, value: str) -> None:
+    record = f"size={value}\n"
+    length = len(record) + 3
+    length += len(str(length)) - 2
+    pax = f"{length} {record}".encode()
+    xinfo = tarfile.TarInfo("././@PaxHeader")
+    xinfo.type = tarfile.XHDTYPE
+    xinfo.size = len(pax)
+    blob = xinfo.tobuf(tarfile.USTAR_FORMAT) + pax + b"\x00" * (-len(pax) % 512)
+    blob += _tar_header("real.txt", 3) + b"abc" + b"\x00" * 509 + b"\x00" * 1024
+    listing = archive.read_tar(_write(tmp_path, "p.tar", blob))
+    assert listing is not None
+    assert [(e.path, e.size) for e in listing.entries] == [("real.txt", 3)]
+
+
+def test_inner_gzip_preview_is_bounded(tmp_path: Path) -> None:
+    bomb = _streamed_gzip(tmp_path / "zeros.bin.gz", b"", 300)
+    start = time.perf_counter()
+    doc = engine.render(bomb)
+    assert time.perf_counter() - start < 3.0
+    assert doc.kind_label == "gzip 壓縮檔"
+    assert "解壓縮後的內容（十六進位）" in doc.html

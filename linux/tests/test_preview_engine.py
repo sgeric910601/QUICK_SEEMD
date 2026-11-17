@@ -370,3 +370,34 @@ def test_hostile_text_in_every_page_type(tmp_path: Path) -> None:
         doc = preview.render_font(path) if key == "font" else preview.render(path)
         _assert_safe(doc.html)
         assert doc.html.startswith(SKELETON), key
+
+
+def test_unexpected_parser_error_falls_back_to_info_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from quickseemd.core.preview import pages
+
+    def boom(*_a: object) -> None:
+        raise IndexError("壞掉的解析器")
+
+    monkeypatch.setattr(pages, "code_page", boom)
+    f = tmp_path / "a.py"
+    f.write_text("x = 1\n", "utf-8")
+    doc = engine.render(f)
+    assert doc.kind_label == "二進位檔"
+    assert "十六進位內容" in doc.html
+
+
+def test_zip_listing_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import zipfile
+
+    from quickseemd.core.preview import archive
+
+    f = tmp_path / "t.zip"
+    with zipfile.ZipFile(f, "w") as z:
+        for i in range(5):
+            z.writestr(f"f{i}.txt", "x")
+    monkeypatch.setattr(archive, "LISTING_SECONDS", -1.0)
+    listing = archive.read_zip(f, f.stat().st_size)
+    assert listing.partial and listing.entries == []
+    assert "壓縮檔太大，只列出前面的部分" in engine.render(f).html

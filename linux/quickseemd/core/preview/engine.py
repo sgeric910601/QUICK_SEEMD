@@ -212,7 +212,14 @@ def render(path: Path) -> Document:
     if not stat.S_ISREG(st.st_mode):
         return special.special_document(p)
     info = FileInfo.of(p)
-    return build(make_page(info), info)
+    try:
+        page = make_page(info)
+    except (MemoryError, KeyboardInterrupt):
+        raise
+    except Exception:  # noqa: BLE001 — 解析器的意外錯誤不能讓預覽整個失敗，改顯示資訊頁
+        log.exception("預覽內容失敗，改用二進位資訊頁：%s", p)
+        page = binary.render(info, info.head(HEAD_LIMIT))
+    return build(page, info)
 
 
 def render_font(path: Path) -> Document:

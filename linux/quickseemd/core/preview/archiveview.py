@@ -20,6 +20,7 @@ MAX_ICONS = 80
 MAX_NODES = 100_000
 MAX_DEPTH = 64
 ICON_SIZE = 36
+PARTIAL_NOTICE = "壓縮檔太大，只列出前面的部分"
 _DIGITS = re.compile(r"(\d+)")
 HEADER = (
     '<div class="arc"><div class="hdr"><span>名稱</span><span class="num">原始大小</span>'
@@ -222,6 +223,8 @@ def render(listing: Listing, info: FileInfo, extra_chips: Iterable[Chip] = ()) -
     page.chips = _chips(tree, listing, extra_chips)
     if listing.truncated:
         page.notices.append(Notice(f"項目太多，只列出前 {fmt.number(MAX_ENTRIES)} 個", warn=True))
+    if listing.partial:
+        page.notices.append(Notice(PARTIAL_NOTICE, warn=True))
     if tree.capped:
         page.notices.append(Notice("路徑太多或太深，只列出部分項目", warn=True))
     if listing.hidden_mac_metadata > 0:
