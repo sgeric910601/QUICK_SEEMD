@@ -326,3 +326,15 @@ def test_custom_color_default_and_adjust_hook():
     )
     assert tool.defaults() == {"bg": "#ffffff", "bg_custom": "#e3332e"}
     assert tool.adjust({"bg": "custom"}, "bg", {}) == {"bg_custom": "#000000"}
+
+
+def test_converter_describe_text_and_folder(tmp_path):
+    from quickseemd.core import converter
+
+    f = tmp_path / "a.txt"
+    f.write_bytes("中文\r\n第二行\r\n".encode("utf-8"))
+    kind, detail = converter.describe(f)
+    assert kind and detail and "UTF-8" in detail and "CRLF" in detail
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "x").write_text("1")
+    assert converter.describe(tmp_path / "d")[1] == "1 個項目"

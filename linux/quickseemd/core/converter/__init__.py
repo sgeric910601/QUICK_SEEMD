@@ -78,6 +78,12 @@ def unavailable(path: Path) -> list[Unavailable]:
     return _engine().unavailable(Path(path))
 
 
+def describe(path: Path) -> tuple[str, str | None]:
+    """轉換頁檔案列的「種類（細節）」，例如（"純文字", "UTF-8 · LF"）、（"資料夾", "12 個項目"）。"""
+    s = _engine().summary(Path(path))
+    return s.kind, s.detail
+
+
 def convert(
     path: Path, format_id: str, ctx, options: dict[str, Any] | None = None
 ) -> list[Path]:  # noqa: ANN001

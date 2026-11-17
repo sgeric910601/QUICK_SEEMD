@@ -146,7 +146,8 @@ def models_dir() -> Path:
 def _models_manifest() -> dict:
     here = Path(__file__).resolve().parent.parent.parent / "data" / "models.json"
     alt = Path(__file__).resolve().parent.parent / "data" / "models.json"
-    for p in (here, alt):
+    installed = data_dir() / "data" / "models.json"  # 安裝程式放的位置
+    for p in (here, alt, installed):
         if p.is_file():
             return json.loads(p.read_text("utf-8"))
     return {}
