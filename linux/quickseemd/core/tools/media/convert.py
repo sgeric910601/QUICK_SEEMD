@@ -9,7 +9,7 @@ from ...model import MEDIA, ToolContext, ToolDefinition
 from ...options import Choice, Info, Kind, Option, Values
 from . import common, engine, geometry
 from .engine import Container
-from .probe import probe
+from .probe import MediaInfo, probe
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,9 @@ FORMATS: dict[str, VideoFormat] = {
         "hevc",
         engine.MP4,
     ),
-    "mov": VideoFormat("MOV", "QuickTime 影片（H.264），適合 Mac 與 iPhone 剪輯。", "h264", engine.MOV),
+    "mov": VideoFormat(
+        "MOV", "QuickTime 影片（H.264），適合 Mac 與 iPhone 剪輯。", "h264", engine.MOV
+    ),
     "m4v": VideoFormat(
         "M4V", "Apple 裝置用的 MP4 變體（H.264），適合 Apple TV、iTunes。", "h264", engine.M4V
     ),
@@ -48,7 +50,9 @@ class ConvertOptions:
     allow_remux: bool
 
 
-def _remux(file: Path, info, fmt: VideoFormat, keep_audio: bool, out: Path, ctx) -> bool:
+def _remux(
+    file: Path, info: MediaInfo, fmt: VideoFormat, keep_audio: bool, out: Path, ctx: ToolContext
+) -> bool:
     args = engine.input_args(file) + engine.map_args(info, audio=keep_audio)
     args += engine.copy_args(info) + fmt.container.args()
     return engine.try_ffmpeg(
@@ -56,7 +60,15 @@ def _remux(file: Path, info, fmt: VideoFormat, keep_audio: bool, out: Path, ctx)
     )
 
 
-def _transcode(file: Path, info, fmt: VideoFormat, size, keep_audio: bool, out: Path, ctx) -> None:
+def _transcode(
+    file: Path,
+    info: MediaInfo,
+    fmt: VideoFormat,
+    size: tuple[int, int],
+    keep_audio: bool,
+    out: Path,
+    ctx: ToolContext,
+) -> None:
     message = f"重新編碼成 {fmt.title}…"
     enc = engine.standard_encode(info, fmt.codec, size, keep_audio=keep_audio)
     args = engine.input_args(file) + engine.encode_args(info, enc, fmt.container)
@@ -160,7 +172,19 @@ TOOL = ToolDefinition(
     input_types=common.MOVIE_TYPES,
     input_label="影片",
     action_title=_action_title,
-    keywords=("convert", "video", "mp4", "mov", "m4v", "hevc", "h265", "h264", "prores", "轉檔", "格式"),
+    keywords=(
+        "convert",
+        "video",
+        "mp4",
+        "mov",
+        "m4v",
+        "hevc",
+        "h265",
+        "h264",
+        "prores",
+        "轉檔",
+        "格式",
+    ),
     options=OPTIONS,
     tint=None,
     badge="MP4",

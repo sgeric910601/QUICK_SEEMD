@@ -154,7 +154,9 @@ def segment_filter(info: MediaInfo, segments: list[tuple[float, float]], vf: str
 def precise_trim(
     file: Path, info: MediaInfo, segments: list[tuple[float, float]], out: Path, ctx: ToolContext
 ) -> None:
-    enc = engine.standard_encode(info, engine.matching_codec(info), geometry.even_size(*info.display_size))
+    enc = engine.standard_encode(
+        info, engine.matching_codec(info), geometry.even_size(*info.display_size)
+    )
     total = sum(b - a for a, b in segments)
     message = "精確剪輯（重新編碼）…"
     container = engine.container_for(file)
@@ -180,7 +182,9 @@ def _summary(r: TrimRange, s: float, e: float, actual_start: float, duration: fl
     if not r.keep:
         rest = format_time(duration - (e - s))
         return f"已刪除 {format_time(s)}–{format_time(e)}，剩下約 {rest}"
-    text = f"已剪下 {format_time(actual_start)}–{format_time(e)}，長度 {format_time(e - actual_start)}"
+    text = (
+        f"已剪下 {format_time(actual_start)}–{format_time(e)}，長度 {format_time(e - actual_start)}"
+    )
     return text + ("（起點對齊關鍵影格）" if actual_start < s - 0.01 else "")
 
 

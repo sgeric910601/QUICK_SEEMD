@@ -24,9 +24,7 @@ def test_fast_keep_snaps_to_keyframe(video_file, outdir):
     out = outputs[0]
     assert out.name == "影片-剪輯.mp4"
     assert abs(duration(out) - 1.5) < 0.2
-    assert ctx.last_message.startswith(
-        "已剪下 0:00.0–0:01.5，長度 0:01.5（起點對齊關鍵影格）（"
-    )
+    assert ctx.last_message.startswith("已剪下 0:00.0–0:01.5，長度 0:01.5（起點對齊關鍵影格）（")
     assert streams(out, "audio")
 
 
@@ -46,7 +44,9 @@ def test_precise_keep_is_exact(video_file, outdir):
 
 
 def test_fast_remove_joins_parts(video_file, outdir):
-    outputs, ctx = run_tool("video.trim", [video_file], outdir, start="0.5", end="1.2", mode="remove")
+    outputs, ctx = run_tool(
+        "video.trim", [video_file], outdir, start="0.5", end="1.2", mode="remove"
+    )
     # 後段起點對齊 1.0 秒的關鍵影格：留下 0–0.5 與 1.0–2.0
     assert abs(duration(outputs[0]) - 1.5) < 0.2
     assert ctx.last_message.startswith("已刪除 0:00.5–0:01.2，剩下約 0:01.3（")

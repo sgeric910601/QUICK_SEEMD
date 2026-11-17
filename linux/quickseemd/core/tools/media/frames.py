@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -122,7 +123,9 @@ def frames_file(file: Path, o: FrameOptions, ctx: ToolContext) -> list[Path]:
         written: list[Path] = []
         for i, t in enumerate(times):
             ctx.check_cancelled()
-            ctx.progress(i / len(times) * 0.95, f"擷取畫面：{i + 1}／{len(times)}（{format_time(t)}）")
+            ctx.progress(
+                i / len(times) * 0.95, f"擷取畫面：{i + 1}／{len(times)}（{format_time(t)}）"
+            )
             png = d / f"grab-{i}.png"
             _grab(file, info, t, size, png, ctx)
             target = _unique(folder, f"{base}-{file_label(t)}.{o.format}")
@@ -182,7 +185,8 @@ def _summary_note(values: Values, info: Info) -> tuple[str, bool]:
     return "將擷取 1 張圖片。", False
 
 
-def _mode_is(mode: str):  # noqa: ANN202 — 回傳 visible 用的判斷函式
+def _mode_is(mode: str) -> Callable[[Values, Info], bool]:
+    """visible 用：目前的擷取方式是 mode 時才顯示。"""
     return lambda v, i: v.get("mode") == mode
 
 

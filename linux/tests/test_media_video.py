@@ -232,7 +232,9 @@ def test_rotate_fast_combines_with_existing(video_file, tmp_path, outdir):
 
 
 def test_rotate_reencode_left(video_file, outdir):
-    outputs, ctx = run_tool("video.rotate", [video_file], outdir, rotation="left", method="reencode")
+    outputs, ctx = run_tool(
+        "video.rotate", [video_file], outdir, rotation="left", method="reencode"
+    )
     v = video_stream(outputs[0])
     assert (v["width"], v["height"], rotation(v)) == (240, 320, 0)
     assert ctx.last_message.startswith("向左轉 90°完成（")
@@ -305,7 +307,9 @@ def test_resize_default_upscales_to_720(video_file, outdir):
 
 @pytest.mark.parametrize("fit", ["letterbox", "crop"])
 def test_resize_aspect(video_file, outdir, fit):
-    outputs, _ = run_tool("video.resize", [video_file], outdir, aspect="wide", resolution=480, fit=fit)
+    outputs, _ = run_tool(
+        "video.resize", [video_file], outdir, aspect="wide", resolution=480, fit=fit
+    )
     out = outputs[0]
     assert out.name == "影片-16x9-480p.mp4"
     v = video_stream(out)

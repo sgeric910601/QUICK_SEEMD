@@ -84,7 +84,13 @@ def merge_graph(
     return ";".join([*chains, joined + tail])
 
 
-def _merge_args(files: list[Path], infos: list[MediaInfo], codec: str, size, fps) -> list[str]:
+def _merge_args(
+    files: list[Path],
+    infos: list[MediaInfo],
+    codec: str,
+    size: tuple[int, int],
+    fps: tuple[float, str],
+) -> list[str]:
     rates = [i.sample_rate for i in infos if i.has_audio]
     audio_rate = aac_sample_rate(max(rates)) if rates else None
     args: list[str] = []

@@ -133,7 +133,11 @@ class MediaInfo:
     def clip_duration(self) -> float:
         """影像軌的長度（不超過整個檔案的長度；不知道時用檔案長度）。"""
         if self.video_duration > 0:
-            return min(self.video_duration, self.duration) if self.duration > 0 else self.video_duration
+            return (
+                min(self.video_duration, self.duration)
+                if self.duration > 0
+                else self.video_duration
+            )
         return self.duration
 
     def require_video(self) -> None:

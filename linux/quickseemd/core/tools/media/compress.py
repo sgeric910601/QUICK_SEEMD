@@ -38,7 +38,9 @@ LEVELS: dict[str, Level] = {
     "balanced": Level(
         "建議壓縮", "畫質與大小兼顧，最高 1080p", "checkmark.seal", 1080, 0.07, 0.55, 128_000
     ),
-    "quality": Level("高畫質", "幾乎看不出差異，保留原始解析度", "sparkles", 0, 0.10, 0.75, 160_000),
+    "quality": Level(
+        "高畫質", "幾乎看不出差異，保留原始解析度", "sparkles", 0, 0.10, 0.75, 160_000
+    ),
 }
 CODEC_TITLES = {"h264": "H.264", "hevc": "HEVC"}
 MIN_SAVING = 0.95  # 至少要小 5% 才交付

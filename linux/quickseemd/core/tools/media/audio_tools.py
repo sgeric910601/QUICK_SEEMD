@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from ... import errors
@@ -44,7 +45,9 @@ def convert_file(file: Path, output: AudioOutput, ctx: ToolContext) -> list[Path
         return [engine.deliver(ctx, out, name, file, f"已轉成 {fmt.title}：{sizes}", False)]
 
 
-def trim_file(file: Path, r: trim.TrimRange, fades: tuple[float, float], ctx) -> list[Path]:
+def trim_file(
+    file: Path, r: trim.TrimRange, fades: tuple[float, float], ctx: ToolContext
+) -> list[Path]:
     info = probe(file, ctx.cancel_event)
     info.require_audio()
     s, e = trim.clamp(info, r)
@@ -116,7 +119,31 @@ def _estimate_note(values: Values, info: Info) -> tuple[str, bool] | None:
     return f"預估約 {format_size(int(kbps * 1000 * single.duration / 8))}", False
 
 
+# 轉換音訊才有的選項
+CONVERT_EXTRA: tuple[Option, ...] = (
+    Option(
+        key="sample_rate",
+        kind=Kind.SEGMENTED,
+        label="取樣率",
+        default=0,
+        choices=(Choice(0, "原始"), Choice(44_100, "44.1 kHz"), Choice(48_000, "48 kHz")),
+        group="取樣率",
+        group_icon="waveform",
+    ),
+    Option(
+        key="channels",
+        kind=Kind.SEGMENTED,
+        label="聲道",
+        default=0,
+        choices=(Choice(0, "原始"), Choice(1, "單聲道"), Choice(2, "立體聲")),
+        group="聲道",
+        group_icon="hifispeaker.2",
+    ),
+)
+
+
 def output_options(default_bitrate: int, convert: bool) -> tuple[Option, ...]:
+    """擷取音訊與轉換音訊共用的選項；轉換音訊另有取樣率與聲道。"""
     opts = [
         common.source_note(),
         Option(
@@ -145,31 +172,14 @@ def output_options(default_bitrate: int, convert: bool) -> tuple[Option, ...]:
         ),
     ]
     if convert:
-        opts += [
-            Option(
-                key="sample_rate",
-                kind=Kind.SEGMENTED,
-                label="取樣率",
-                default=0,
-                choices=(Choice(0, "原始"), Choice(44_100, "44.1 kHz"), Choice(48_000, "48 kHz")),
-                group="取樣率",
-                group_icon="waveform",
-            ),
-            Option(
-                key="channels",
-                kind=Kind.SEGMENTED,
-                label="聲道",
-                default=0,
-                choices=(Choice(0, "原始"), Choice(1, "單聲道"), Choice(2, "立體聲")),
-                group="聲道",
-                group_icon="hifispeaker.2",
-            ),
-        ]
+        opts += CONVERT_EXTRA
     opts.append(Option(key="_estimate", kind=Kind.NOTE, note=_estimate_note, visible=_uses_bitrate))
     return tuple(opts)
 
 
-def _title(prefix: str):  # noqa: ANN202 — 回傳執行按鈕文字的函式
+def _title(prefix: str) -> Callable[[Values, Info], str]:
+    """執行按鈕文字：「擷取成 M4A (AAC)」「轉成 WAV」。"""
+
     def title(values: Values, info: Info) -> str:
         fmt = FORMATS.get(values.get("format"))
         return f"{prefix} {fmt.title}" if fmt else prefix

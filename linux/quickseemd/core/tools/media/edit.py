@@ -89,7 +89,9 @@ OPS: dict[str, RotateOp] = {
     "right": RotateOp("向右轉 90°", "順時針", "rotate.right", -90, "transpose=clock"),
     "left": RotateOp("向左轉 90°", "逆時針", "rotate.left", 90, "transpose=cclock"),
     "upside_down": RotateOp("旋轉 180°", "上下顛倒", "arrow.up.arrow.down", 180, "hflip,vflip"),
-    "flip_h": RotateOp("水平翻轉", "左右鏡像（例如自拍鏡頭）", "arrow.left.and.right", None, "hflip"),
+    "flip_h": RotateOp(
+        "水平翻轉", "左右鏡像（例如自拍鏡頭）", "arrow.left.and.right", None, "hflip"
+    ),
     "flip_v": RotateOp("垂直翻轉", "上下鏡像", "arrow.up.and.down", None, "vflip"),
 }
 

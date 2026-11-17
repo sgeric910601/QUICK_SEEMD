@@ -75,8 +75,7 @@ def gif_filter(o: GifOptions, size: tuple[int, int], fps: float) -> str:
     if levels:
         chain.append(posterize(levels))
     return (
-        ",".join(chain)
-        + ",split[a][b];[a]palettegen=stats_mode=single[p];[b][p]paletteuse=new=1"
+        ",".join(chain) + ",split[a][b];[a]palettegen=stats_mode=single[p];[b][p]paletteuse=new=1"
     )
 
 
@@ -102,7 +101,13 @@ def gif_file(file: Path, o: GifOptions, ctx: ToolContext) -> list[Path]:
     with engine.work_dir(ctx, file) as d:
         out = d / "animation.gif"
         frames = engine.run_ffmpeg(
-            ctx, args, out, duration=count / fps, message="製作 GIF…", span=(0, 0.9), on_frame=on_frame
+            ctx,
+            args,
+            out,
+            duration=count / fps,
+            message="製作 GIF…",
+            span=(0, 0.9),
+            on_frame=on_frame,
         )
         added = frames if 0 < frames <= count else count
         summary = f"GIF 動畫：{added} 格、{int(fps)} fps、長 {added / fps:.1f} 秒"
@@ -193,7 +198,8 @@ OPTIONS: tuple[Option, ...] = (
         label="每秒影格（流暢度）",
         default=10,
         choices=tuple(
-            Choice(f, f"{f} fps", "較流暢、檔案較大" if f >= 15 else "檔案較小") for f in FPS_CHOICES
+            Choice(f, f"{f} fps", "較流暢、檔案較大" if f >= 15 else "檔案較小")
+            for f in FPS_CHOICES
         ),
         group="每秒影格（流暢度）",
         group_icon="film.stack",

@@ -78,7 +78,9 @@ def test_audio_convert_rate_and_channels(audio_file, outdir):
 
 
 def test_audio_convert_keeps_24_bit(tmp_path, outdir):
-    src = encode_audio(make_audio(tmp_path / "s.wav", seconds=1), tmp_path / "高.wav", "-c:a", "pcm_s24le")
+    src = encode_audio(
+        make_audio(tmp_path / "s.wav", seconds=1), tmp_path / "高.wav", "-c:a", "pcm_s24le"
+    )
     outputs, _ = run_tool("audio.convert", [src], outdir, format="aiff")
     assert streams(outputs[0], "audio")[0]["codec_name"] == "pcm_s24be"
     alac, _ = run_tool("audio.convert", [src], outdir, format="alac")

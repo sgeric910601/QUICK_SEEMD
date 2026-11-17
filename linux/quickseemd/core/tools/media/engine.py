@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ... import backends, errors, naming
 from ...model import ToolContext, per_file
@@ -114,7 +115,7 @@ def run_ffmpeg(
     return state.frames
 
 
-def try_ffmpeg(ctx: ToolContext, args: Sequence[str], out: Path, **kw) -> bool:
+def try_ffmpeg(ctx: ToolContext, args: Sequence[str], out: Path, **kw: Any) -> bool:
     """執行 ffmpeg；失敗（不是取消）時回傳 False，讓呼叫端改用重新編碼。"""
     try:
         run_ffmpeg(ctx, args, out, **kw)
@@ -162,7 +163,16 @@ def gop(fps: float) -> str:
 def video_codec_args(codec: str, bitrate: int, fps: float, maxrate: int | None = None) -> list[str]:
     """H.264 High／HEVC Main（平均位元率、2 秒關鍵影格、B 影格）或 ProRes 422。"""
     if codec == "prores":
-        return ["-c:v", "prores_ks", "-profile:v", "2", "-vendor", "apl0", "-pix_fmt", "yuv422p10le"]
+        return [
+            "-c:v",
+            "prores_ks",
+            "-profile:v",
+            "2",
+            "-vendor",
+            "apl0",
+            "-pix_fmt",
+            "yuv422p10le",
+        ]
     common = ["-b:v", str(int(bitrate)), "-g", gop(fps), "-pix_fmt", "yuv420p"]
     if maxrate:
         common += ["-maxrate", str(int(maxrate)), "-bufsize", str(int(maxrate))]
@@ -231,7 +241,7 @@ class Encode:
     fit: str | None = None  # None＝直接縮放；"pad" 補黑邊；"crop" 裁切填滿
 
 
-def standard_encode(info: MediaInfo, codec: str, size: tuple[int, int], **kw) -> Encode:
+def standard_encode(info: MediaInfo, codec: str, size: tuple[int, int], **kw: Any) -> Encode:
     """「盡量保持畫質」的位元率（原版 MTVideoOps.spec 的預設）。"""
     fps = kw.pop("fps", None) or info.fps
     rate = kw.pop("bitrate", None) or preserving(info, codec, size[0], size[1], fps)

@@ -77,9 +77,7 @@ def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
     rate = common.number(values, "rate", 2.0)
     keep_audio = common.flag(values, "keep_audio", True)
     keep_pitch = common.flag(values, "keep_pitch", True)
-    return engine.batch(
-        files, ctx, lambda f, sub: speed_file(f, rate, keep_pitch, keep_audio, sub)
-    )
+    return engine.batch(files, ctx, lambda f, sub: speed_file(f, rate, keep_pitch, keep_audio, sub))
 
 
 def _length_note(values: Values, info: Info) -> tuple[str, bool] | None:

@@ -96,7 +96,12 @@ def test_frames_single_time(video_file, outdir):
 
 def test_frames_png_max_side(video_file, outdir):
     outputs, _ = run_tool(
-        "video.frames", [video_file], outdir, mode="times", times="0.5, 9", format="png",
+        "video.frames",
+        [video_file],
+        outdir,
+        mode="times",
+        times="0.5, 9",
+        format="png",
         max_side=640,
     )
     names = sorted(p.name for p in outputs[0].iterdir())

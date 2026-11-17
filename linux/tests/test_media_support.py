@@ -23,7 +23,9 @@ def ffprobe() -> str:
 
 
 def run_ffmpeg(*args: str) -> None:
-    process.run_checked([ffmpeg(), "-hide_banner", "-nostdin", "-n", "-v", "error", *args], "ffmpeg")
+    process.run_checked(
+        [ffmpeg(), "-hide_banner", "-nostdin", "-n", "-v", "error", *args], "ffmpeg"
+    )
 
 
 def probe(path: Path) -> dict[str, Any]:
