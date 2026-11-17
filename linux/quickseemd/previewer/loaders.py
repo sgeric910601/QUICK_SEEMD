@@ -3,6 +3,8 @@
 載入失敗一律丟 QSError（中文訊息），呼叫端只要顯示錯誤頁。
 圖片先只讀檔頭拿尺寸；超過 MAX_PIXELS 時絕不解碼全尺寸：
 能邊解碼邊縮小的格式（JPEG、SVG）縮成 SCALED_EDGE，其他格式顯示「圖片太大」。
+GdkPixbuf 讀不到尺寸時改用 Pillow 讀檔頭；仍讀不到就不顯示（不能當成 1 像素去解碼）。
+（GdkPixbufLoader 的 size-prepared 擋不住 PNG 這類格式：它在同一次寫入裡就配置全尺寸。）
 """
 
 from __future__ import annotations
@@ -37,17 +39,38 @@ def _oriented(pixbuf: GdkPixbuf.Pixbuf) -> GdkPixbuf.Pixbuf:
     return pixbuf.apply_embedded_orientation() or pixbuf
 
 
-def too_big(width: int, height: int) -> errors.QSError:
-    return errors.QSError(
-        f"圖片太大（{width} × {height} 像素），為了不佔用太多記憶體，不顯示內容。"
-    )
+def too_big(width: int | None = None, height: int | None = None) -> errors.QSError:
+    size = f"（{width} × {height} 像素）" if width and height else ""
+    return errors.QSError(f"圖片太大{size}，為了不佔用太多記憶體，不顯示內容。")
+
+
+def unknown_size() -> errors.QSError:
+    return errors.QSError("無法判斷圖片大小，為了不佔用太多記憶體，不顯示內容。")
+
+
+def _header_size(path: Path) -> tuple[int, int]:
+    """GdkPixbuf 讀不到尺寸時，用 Pillow 只讀檔頭（不解碼）；還是讀不到就拒絕。"""
+    from PIL import Image  # noqa: PLC0415
+
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+    except Image.DecompressionBombError as exc:  # Pillow 自己就判定太大
+        raise too_big() from exc
+    except (OSError, ValueError, SyntaxError) as exc:
+        raise unknown_size() from exc
+    if width <= 0 or height <= 0:
+        raise unknown_size()
+    return width, height
 
 
 def _probe(path: Path) -> tuple[str, int, int]:
-    """只讀檔頭：（格式名稱, 寬, 高）；不認得的格式丟 QSError。"""
+    """只讀檔頭：（格式名稱, 寬, 高）；不認得的格式或尺寸不明一律丟 QSError。"""
     fmt, width, height = GdkPixbuf.Pixbuf.get_file_info(str(path))
     if fmt is None:
         raise errors.unreadable("不支援的圖片格式")
+    if width <= 0 or height <= 0:  # 尺寸不明：不能當成 1 像素去解碼
+        width, height = _header_size(path)
     return fmt.get_name(), width, height
 
 

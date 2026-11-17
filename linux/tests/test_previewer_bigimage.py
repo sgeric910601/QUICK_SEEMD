@@ -23,6 +23,13 @@ PROBE = r"""
 import json, resource, sys
 cap = int(sys.argv[2])
 resource.setrlimit(resource.RLIMIT_DATA, (cap, cap))
+if len(sys.argv) > 3 and sys.argv[3] == "unknown-size":
+    # 模擬 GdkPixbuf 讀不到尺寸（回傳 -1 × -1）
+    import gi
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GdkPixbuf
+    _real = GdkPixbuf.Pixbuf.get_file_info
+    GdkPixbuf.Pixbuf.get_file_info = staticmethod(lambda p: (_real(p)[0], -1, -1))
 from pathlib import Path
 from quickseemd.previewer import content
 from quickseemd.previewer.uri import resolve
@@ -56,11 +63,11 @@ def write_bilevel_png(path: Path, width: int, height: int) -> Path:
     return path
 
 
-def _probe(path: Path, cap_bytes: int) -> dict:
+def _probe(path: Path, cap_bytes: int, mode: str = "") -> dict:
     env = dict(os.environ, PYTHONPATH=str(conftest.LINUX_DIR))
     env.pop("DISPLAY", None)
     res = subprocess.run(
-        [sys.executable, "-c", PROBE, str(path), str(cap_bytes)],
+        [sys.executable, "-c", PROBE, str(path), str(cap_bytes), mode],
         capture_output=True,
         text=True,
         env=env,
@@ -141,4 +148,56 @@ def test_unknown_format_is_unreadable(tmp_path: Path):
     junk = tmp_path / "不是圖.png"
     junk.write_bytes(b"not an image at all")
     with pytest.raises(errors.QSError):
+        loaders.load_image(junk)
+
+
+# ------------------------------------------------------------------ GdkPixbuf 讀不到尺寸時一律保守處理
+
+
+def test_unknown_size_huge_png_is_refused_under_1gb(tmp_path: Path):
+    png = write_bilevel_png(tmp_path / "尺寸不明.png", 20000, 20000)
+    out = _probe(png, 1 << 30, "unknown-size")
+    assert out["view"] == "page"
+    assert "圖片太大" in out["html"]
+    assert out["hwm_kb"] < 1024 * 1024
+
+
+def test_unknown_size_moderate_png_reports_real_size(tmp_path: Path):
+    png = write_bilevel_png(tmp_path / "略大.png", 9000, 9000)  # 8100 萬像素，Pillow 不會當成炸彈
+    out = _probe(png, 1 << 30, "unknown-size")
+    assert out["view"] == "page"
+    assert "9000 × 9000" in out["html"]
+
+
+def _unknown_size(monkeypatch, fmt_name: str = "png") -> None:
+    real = loaders.GdkPixbuf.Pixbuf.get_file_info
+
+    def fake(path):
+        fmt = real(path)[0] or _FakeFormat(fmt_name)
+        return fmt, -1, -1
+
+    monkeypatch.setattr(loaders.GdkPixbuf.Pixbuf, "get_file_info", fake)
+
+
+def test_unknown_size_small_image_still_decodes(tmp_path: Path, monkeypatch):
+    png = conftest.make_image(tmp_path / "小圖.png", size=(320, 200))
+    _unknown_size(monkeypatch)
+    img = loaders.load_image(png)
+    assert (img.width, img.height) == (320, 200)
+
+
+@pytest.mark.parametrize("size", [(0, 0), (-1, 5), (5, -1)])
+def test_non_positive_size_never_decodes_unreadable_header(tmp_path: Path, monkeypatch, size):
+    junk = tmp_path / "看不懂的檔頭.png"
+    junk.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 64)
+
+    def fake(_path):
+        return _FakeFormat("png"), *size
+
+    def must_not_decode(*_a, **_kw):
+        raise AssertionError("尺寸不明時不應該解碼")
+
+    monkeypatch.setattr(loaders.GdkPixbuf.Pixbuf, "get_file_info", fake)
+    monkeypatch.setattr(loaders.GdkPixbuf.PixbufAnimation, "new_from_file", must_not_decode)
+    with pytest.raises(errors.QSError, match="無法判斷圖片大小"):
         loaders.load_image(junk)
