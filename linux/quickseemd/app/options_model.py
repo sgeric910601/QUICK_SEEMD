@@ -141,7 +141,7 @@ class OptionsState:
     def placeholder(self, opt: Option, fallback: str = "") -> str:
         """欄位的提示文字：工具有 dynamic_placeholder 就用它（例如「報告-已合併」），否則用 placeholder。"""
         static = opt.placeholder or fallback
-        func = getattr(opt, "dynamic_placeholder", None)
+        func = opt.dynamic_placeholder
         if func is None:
             return static
         text = _safe(lambda: func(self.values, self.info), None, opt.key)

@@ -201,6 +201,11 @@ def test_tool_page_all_option_kinds(window, data, tmp_path, width):
     page.add_files([data["png"], data["png2"], data["pdf"]])
     wait(lambda: page.options.values["width"] == 640)  # inspect → prefill
     assert page.options.info["page_count"] == 8
+    # 動態提示文字：檔案資訊讀到後重新評估
+    panel = page.panel
+    assert panel.control("text")._entry.get_property("placeholder-text") == "共 8 頁"
+    assert panel.control("secret")._entry.get_property("placeholder-text") == "至少 4 個字"
+    assert panel.control("width")._hint.get_label() == "原圖 640 px"
     texts = labels_in(win)
     for t in ("壓縮程度", "高度壓縮", "推薦", "JPEG", "H.264", "80%", "例如：1-3, 5, 8-　共 8 頁"):
         assert t in texts, t
