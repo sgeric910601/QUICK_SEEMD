@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import select
 import subprocess
 import time
 from collections.abc import Callable, Iterator
@@ -24,6 +25,10 @@ DRIVER = TESTS_DIR / "agent_gui_driver.py"
 PYTHON = "/usr/bin/python3"
 SERVICE = "dev.quickseemd.Agent"
 RING_CENTER = (640, 420)
+HUD_BOX = (906, 10, 1266, 300)
+SHELF_BOX = (1012, 402, 1258, 548)
+SOURCE_READY_TIMEOUT = 15.0
+SHOT_TIMEOUT = 10.0
 LABEL_RADIUS = 138
 
 BUS_CONF = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
@@ -156,8 +161,25 @@ class Session:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(2.0)
+        assert proc.stdout is not None
+        ready, _w, _x = select.select([proc.stdout], [], [], SOURCE_READY_TIMEOUT)
+        if not ready or proc.stdout.readline().strip() != b"READY":
+            proc.terminate()
+            proc.wait(timeout=10)
+            pytest.fail("拖曳來源視窗沒有出現")
         return proc
+
+    def wait_shot(self, path: Path, box: tuple[int, int, int, int], minimum: int) -> int:
+        """反覆截圖，直到指定範圍的亮像素夠多（面板或暫存畫出來了）或逾時。"""
+        count = 0
+        deadline = time.monotonic() + SHOT_TIMEOUT
+        while time.monotonic() < deadline:
+            self.driver("shot", str(path))
+            count = _light_pixels(path, box)
+            if count > minimum:
+                break
+            time.sleep(0.2)
+        return count
 
     def log_text(self) -> str:
         try:
@@ -251,10 +273,7 @@ def test_run_action_queue_and_hud(session: Session, tmp_path: Path) -> None:
     session.call("Notify", "(sss)", ("已拷貝路徑", "link", str(src)))
     assert wait_for(lambda: (session.files / "報告.zip").exists())
     assert wait_for(lambda: "不認得動作「bogus.action」" in session.log_text())
-    time.sleep(1.0)
-    shot = tmp_path / "hud.png"
-    session.driver("shot", str(shot))
-    assert _light_pixels(shot, (906, 10, 1266, 300)) > 20000
+    assert session.wait_shot(tmp_path / "hud.png", HUD_BOX, 20000) > 20000
     assert src.read_text("utf-8") == "內容"
 
 
@@ -271,21 +290,18 @@ def test_add_to_shelf_shows_shelf(session: Session, tmp_path: Path) -> None:
     f = session.files / "暫存.txt"
     f.write_text("x")
     session.call("AddToShelf", "(as)", ([str(f), str(session.files)],))
-    time.sleep(1.0)
-    shot = tmp_path / "shelf.png"
-    session.driver("shot", str(shot))
     # 浮動暫存出現在螢幕右緣往內 270、垂直置中
-    assert _light_pixels(shot, (1012, 402, 1258, 548)) > 15000
+    assert session.wait_shot(tmp_path / "shelf.png", SHELF_BOX, 15000) > 15000
 
 
 # ------------------------------------------------------------------ 拖曳輪盤
 
 
-def test_drag_from_own_shelf_is_ignored(session: Session) -> None:
+def test_drag_from_own_shelf_is_ignored(session: Session, tmp_path: Path) -> None:
     f = session.files / "架上.txt"
     f.write_text("x")
     session.call("AddToShelf", "(as)", ([str(f)],))
-    time.sleep(1.0)
+    assert session.wait_shot(tmp_path / "shelf.png", SHELF_BOX, 5000) > 5000
     before = session.log_text().count("輪盤出現")
     # 浮動暫存第一列（視窗在 1010,400；標題列約 40 像素高）
     session.driver("drag", "1090", "465", "640", "420", "Alt_L", "0.1", "640", "282")

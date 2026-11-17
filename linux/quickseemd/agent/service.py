@@ -125,9 +125,8 @@ class AgentService:
         title_raw, icon_raw, message_raw = _args(params, 3)
         title = _text(title_raw, MAX_TITLE)
         message = _text(message_raw, MAX_MESSAGE)
+        # 只允許英數、點、底線、連字號（沒有斜線）；圖示名稱只拿來查圖示主題，不會當成路徑
         icon = icon_raw if isinstance(icon_raw, str) and _ICON_RE.match(icon_raw) else ""
-        if ".." in icon:
-            icon = ""
         self._dispatch(lambda: self._handler.notify(title, icon, message))
         return True
 

@@ -9,12 +9,11 @@ from __future__ import annotations
 import logging
 import math
 import os
-import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from urllib.parse import unquote_to_bytes, urlsplit
 
-from ..core import quickactions, registry
+from ..core import registry
 from ..core import settings as qs_settings
 from ..core import wheel as qs_wheel
 from ..core.filetypes import file_ref
@@ -88,14 +87,6 @@ def label_center(index: int, count: int) -> tuple[float, float]:
     return CENTER + r * math.sin(angle), CENTER - r * math.cos(angle)
 
 
-def _minimum_files() -> dict[str, int]:
-    """工具的最少檔案數；這個版本沒有的工具給一個不可能達到的數字，動作就不會出現。"""
-    minimum = registry.minimum_files()
-    for act in quickactions.ACTIONS:
-        minimum.setdefault(act.tool_id, sys.maxsize)
-    return minimum
-
-
 def _tint_for_tool(tool_id: str) -> RGB:
     tool = registry.tool(tool_id)
     return tool.tint_rgb if tool is not None else ACCENT
@@ -118,9 +109,10 @@ def build_catalog(mode: str, paths: Sequence[Path]) -> list[qs_wheel.WheelItem]:
     return qs_wheel.catalog(
         mode,
         refs,
-        minimum_files=_minimum_files(),
+        minimum_files=registry.minimum_files(),
         tint_for_tool=_tint_for_tool,
         targets=_targets(paths),
+        registered=set(registry.by_id()),  # 這個版本沒有的工具，它的動作不放上輪盤
     )
 
 

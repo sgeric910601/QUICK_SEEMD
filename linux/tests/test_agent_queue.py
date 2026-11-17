@@ -229,6 +229,8 @@ def test_finish_of_dismissed_item_is_harmless(setup, tmp_path, fake_tools):
     first = queue.run_action("other.zip", [f])
     queue.run_action("other.zip", [f])
     queue.dismiss(first)
+    # 照原版：關掉列只是不顯示，工作照樣跑完（要停止請按「取消」）
+    assert not jobs[0].cancelled
     jobs[0].done({"outputs": []})
     assert queue.items[0].status is Status.RUNNING
     assert len(jobs) == 2

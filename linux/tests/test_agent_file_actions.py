@@ -193,3 +193,28 @@ def test_move_into_readonly_folder_fails(tmp_path):
     finally:
         ro.chmod(0o700)
     assert f.exists()
+
+
+# ------------------------------------------------------------------ 剪貼簿裡不能夾帶控制字元
+
+
+def test_copy_path_refuses_control_characters():
+    clean = [Path("/a/x.txt"), Path("/b/有 空格.pdf")]
+    assert fa.copy_path_payload(clean) == "/a/x.txt\n/b/有 空格.pdf"
+    for bad in ("/a/b\nrm -rf ~", "/a/\x1b[31m.txt", "/a/\x9b.txt", "/a/\x7f", "/a/\tb"):
+        assert fa.copy_path_payload([Path("/ok"), Path(bad)]) is None
+    assert fa.UNSAFE_PATH_NOTICE == ("拷貝路徑", "有檔名包含控制字元，沒有拷貝。")
+
+
+def test_copy_files_omits_text_targets_for_unsafe_names():
+    p = fa.clipboard_payloads([Path("/tmp/a\nb.txt")])
+    assert set(p) == {"x-special/gnome-copied-files", "text/uri-list"}
+    assert p["text/uri-list"] == b"file:///tmp/a%0Ab.txt\r\n"
+
+
+def test_clean_clipboard_text_strips_c0_c1_but_keeps_newline_and_tab():
+    raw = "a\x00b\x1b[31mc\x9b\r\nd\te\x7f\u0085f"
+    assert fa.clean_clipboard_text(raw) == "ab[31mc\nd\tef"
+    assert fa.clean_clipboard_text("https://example.com/測試\n第二行") == (
+        "https://example.com/測試\n第二行"
+    )

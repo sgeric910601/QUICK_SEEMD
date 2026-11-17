@@ -5,8 +5,8 @@
   agent_gui_driver.py drag 起點x 起點y 終點x 終點y 按鍵 按住秒數 [放下x 放下y]
   agent_gui_driver.py click x y
   agent_gui_driver.py clipboard 格式          把剪貼簿內容印到標準輸出
-  agent_gui_driver.py source3 檔案 x y        GTK3 拖曳來源視窗
-  agent_gui_driver.py source4 檔案            GTK4 拖曳來源視窗（放在左上角）
+  agent_gui_driver.py source3 檔案 x y        GTK3 拖曳來源視窗（出現後印出 READY）
+  agent_gui_driver.py source4 檔案            GTK4 拖曳來源視窗（放在左上角，出現後印出 READY）
 """
 
 from __future__ import annotations
@@ -127,6 +127,7 @@ def source3(args: list[str]) -> None:
     box.connect("drag-data-get", lambda _w, _c, data, _i, _t: data.set_uris([uri]))
     box.connect("drag-data-delete", lambda *_a: print("DELETE-REQUESTED", flush=True))
     win.connect("destroy", Gtk.main_quit)
+    win.connect("map-event", lambda *_a: print("READY", flush=True) and False)
     win.show_all()
     Gtk.main()
 
@@ -155,6 +156,7 @@ def source4(args: list[str]) -> None:
 
         src.connect("prepare", prepare)
         label.add_controller(src)
+        win.connect("map", lambda *_a: print("READY", flush=True))
         win.present()
 
     app.connect("activate", activate)
