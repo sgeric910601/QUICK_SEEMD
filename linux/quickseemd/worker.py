@@ -54,7 +54,10 @@ def main() -> int:
     result = run_spec(spec, report, cancel)
     payload = {"type": "result", **result.to_json(), "skipped": result.skipped}
     emit(payload)
-    out.close()
+    try:
+        out.close()
+    except OSError:  # 讀取端（介面程序）已經離開，結果無處可送，照常結束
+        pass
     return 0 if result.error is None else 1
 
 

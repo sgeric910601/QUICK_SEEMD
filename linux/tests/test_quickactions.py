@@ -67,3 +67,8 @@ def test_wheel_uses_minimum_files():
 def test_grouped_keeps_order():
     groups = qa.grouped(qa.menu_actions([MP4]))
     assert [g for g, _ in groups] == ["影音", "其他"]
+
+
+def test_wheel_skips_actions_without_registered_tool():
+    got = ids(qa.wheel_actions([PDF], {}, registered={"pdf.compress"}))
+    assert got == ["pdf.compress-recommended"]

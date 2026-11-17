@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+import logging
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 
 from . import quickactions
@@ -110,7 +111,8 @@ def converter_targets(paths: Sequence[str]) -> list[TargetLike]:
 
     try:
         found = converter.common_targets([Path(p) for p in paths[:5]])
-    except (NotImplementedError, OSError):
+    except Exception:  # noqa: BLE001 — 輪盤不能因為轉換器出錯而打不開，只少了格式格子
+        logging.getLogger(__name__).exception("讀取可轉換格式失敗")
         return []
     return [
         TargetLike(
@@ -138,11 +140,12 @@ def catalog(
     minimum_files: dict[str, int],
     tint_for_tool: Callable[[str], RGB],
     targets: Callable[[], Sequence[TargetLike]] = lambda: (),
+    registered: Collection[str] | None = None,
 ) -> list[WheelItem]:
-    """這個模式下輪盤要列出哪些格子（最多 10 格）。"""
+    """這個模式下輪盤要列出哪些格子（最多 10 格）。registered：已安裝的工具代碼。"""
     if mode == "actions":
         return list(FILE_ACTIONS)
-    actions = quickactions.wheel_actions(refs, minimum_files)
+    actions = quickactions.wheel_actions(refs, minimum_files, registered)
 
     def action_item(a: quickactions.QuickAction) -> WheelItem:
         return WheelItem("action", a.id, short_title(a.title), a.icon, tint_for_tool(a.tool_id))

@@ -7,7 +7,7 @@ Office 的 10 個動作在 PR1 先停用（enabled=False），第二個 PR 實�
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -395,13 +395,22 @@ def menu_actions(refs: Sequence[FileRef]) -> list[QuickAction]:
     return out
 
 
-def wheel_actions(refs: Sequence[FileRef], minimum_files: dict[str, int]) -> list[QuickAction]:
-    """輪盤用（原版 WheelCatalog 規則）：檔案數 ≥ 工具的 minimum_files，只檢查前 20 個檔案。"""
+def wheel_actions(
+    refs: Sequence[FileRef],
+    minimum_files: dict[str, int],
+    registered: Collection[str] | None = None,
+) -> list[QuickAction]:
+    """輪盤用（原版 WheelCatalog 規則）：檔案數 ≥ 工具的 minimum_files，只檢查前 20 個檔案。
+
+    registered 有給時，略過對應工具不存在的動作。
+    """
     if not refs:
         return []
     sample = list(refs[:20])
     out = []
     for a in enabled_actions():
+        if registered is not None and a.tool_id not in registered:
+            continue
         if len(refs) < minimum_files.get(a.tool_id, 1):
             continue
         if a.accepts(sample):
