@@ -11,25 +11,17 @@ from __future__ import annotations
 
 import html
 import os
-import re
 import sys
 import tempfile
 from pathlib import Path
 
 from .. import errors, naming, process
-from . import mdrender, office, pdf, textcodec
+from . import htmlsafe, mdrender, office, pdf, textcodec
 from .formats import Format
 from .profile import Profile
 
 HTMLPDF_TIMEOUT = 300.0
 _HTMLPDF = Path(__file__).with_name("htmlpdf.py")
-# 產生給 LibreOffice 匯入的 HTML：不讓它去抓網路上的圖片與資源
-_REMOTE_REF = re.compile(
-    r"(<(?:img|iframe|embed|object|video|audio|source|script|link|input)\b[^>]*?)"
-    r"\b(src|href|data|poster)(\s*=\s*[\"']?\s*(?:https?:|ftp:|//))",
-    re.IGNORECASE,
-)
-
 PLAIN_CSS = """body { margin: 0; color: #000; }
 pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 pre.text { font-family: "Helvetica Neue", "Noto Sans CJK TC", sans-serif; font-size: 12pt; line-height: 1.2; }
@@ -37,10 +29,6 @@ pre.code { font-family: Menlo, "Noto Sans Mono CJK TC", monospace; font-size: 10
 .page { break-before: page; page-break-before: always; }"""  # noqa: E501
 TEXT_FONT = "Noto Sans CJK TC"
 CODE_FONT = "Noto Sans Mono CJK TC"
-
-
-def block_remote(markup: str) -> str:
-    return _REMOTE_REF.sub(r"\1data-blocked-\2\3", markup)
 
 
 def plain_html(text: str, title: str, code: bool) -> str:
@@ -97,7 +85,15 @@ def _from_html(
     if fid == "pdf":
         html_to_pdf(_write_html(work, out.stem, markup), out, base_dir, ctx)
         return
-    source = _write_html(work, out.stem, block_remote(markup))
+    source = _write_html(work, out.stem, htmlsafe.sanitize(markup, base_dir))
+    _via_office(source, fid, out, work, ctx, office.HTML_IMPORT)
+
+
+def _user_html_to_office(path: Path, fid: str, out: Path, work: Path, ctx) -> None:  # noqa: ANN001
+    """使用者的 HTML 檔：先清掉外部參照（本機圖片改成內嵌），再交給 LibreOffice。"""
+    clean = htmlsafe.sanitize_bytes(path.read_bytes(), path.parent)
+    source = _scratch(work) / naming.join_name(naming.sanitize(out.stem), "html")
+    source.write_bytes(clean)
     _via_office(source, fid, out, work, ctx, office.HTML_IMPORT)
 
 
@@ -152,9 +148,10 @@ def convert(
             _plain(path, profile, fmt.id, out, work, options, ctx)
         elif kind == "html" and fmt.id == "pdf":
             html_to_pdf(path, out, path.parent, ctx)
-        elif kind in ("html", "rtf", "doc", "docx", "odt"):
-            infilter = office.HTML_IMPORT if kind == "html" else None
-            _via_office(path, fmt.id, out, work, ctx, infilter)
+        elif kind == "html":
+            _user_html_to_office(path, fmt.id, out, work, ctx)
+        elif kind in ("rtf", "doc", "docx", "odt"):
+            _via_office(path, fmt.id, out, work, ctx, None)
         else:
             raise errors.unsupported_target(path.name, fmt.display_name)
     except OSError as exc:

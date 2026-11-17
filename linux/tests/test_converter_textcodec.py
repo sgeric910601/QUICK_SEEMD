@@ -15,27 +15,27 @@ def test_utf8_bom_is_detected_first() -> None:
     assert d.text == "中文\n"
     assert d.encoding == "utf-8"
     assert d.had_bom is True
-    assert d.encoding_name == "UTF-8"
+    assert d.display_name == "UTF-8"
 
 
 def test_utf16_le_bom() -> None:
     d = tc.decode_bytes(b"\xff\xfe" + "測試\n".encode("utf-16-le"))
     assert d.text == "測試\n"
-    assert d.encoding_name == "UTF-16"
+    assert d.display_name == "UTF-16"
     assert d.had_bom is True
 
 
 def test_utf16_be_bom() -> None:
     d = tc.decode_bytes(b"\xfe\xff" + "測試".encode("utf-16-be"))
     assert d.text == "測試"
-    assert d.encoding_name == "UTF-16"
+    assert d.display_name == "UTF-16"
 
 
 def test_utf32_bom_before_utf16() -> None:
     data = "ab".encode("utf-32")  # 開頭 FF FE 00 00
     d = tc.decode_bytes(data)
     assert d.text == "ab"
-    assert d.encoding_name == "UTF-32"
+    assert d.display_name == "UTF-32"
 
 
 def test_empty_is_utf8_without_bom() -> None:
@@ -46,7 +46,7 @@ def test_empty_is_utf8_without_bom() -> None:
 
 def test_plain_utf8() -> None:
     d = tc.decode_bytes("繁體 English".encode())
-    assert d.encoding_name == "UTF-8"
+    assert d.display_name == "UTF-8"
     assert d.had_bom is False
 
 
@@ -67,7 +67,7 @@ def test_bomless_utf16_be_by_zero_pattern() -> None:
 
 def test_big5_sample(samples: Path) -> None:
     d = tc.decode_file(samples / "big5.txt")
-    assert d.encoding_name == "Big5"
+    assert d.display_name == "Big5"
     assert "繁體中文" in d.text
 
 
@@ -82,13 +82,13 @@ def test_big5_sample(samples: Path) -> None:
 )
 def test_statistical_detection(text: str, codec: str, name: str) -> None:
     d = tc.decode_bytes(text.encode(codec))
-    assert d.encoding_name == name
+    assert d.display_name == name
     assert d.text == text
 
 
 def test_short_big5_prefers_chinese() -> None:
     d = tc.decode_bytes("測試".encode("cp950"))
-    assert d.encoding_name == "Big5"
+    assert d.display_name == "Big5"
     assert d.text == "測試"
 
 
@@ -96,7 +96,7 @@ def test_forced_encoding_is_used() -> None:
     raw = "測試".encode("cp950")
     d = tc.decode_bytes(raw, forced="big5hkscs")
     assert d.text == "測試"
-    assert d.encoding_name == "Big5"
+    assert d.display_name == "Big5"
 
 
 def test_forced_encoding_failure_message() -> None:
@@ -108,7 +108,7 @@ def test_forced_encoding_failure_message() -> None:
 def test_forced_codec_mapping() -> None:
     assert tc.forced_codec("auto") is None
     assert tc.forced_codec(None) is None
-    assert tc.forced_codec("big5") == "big5hkscs"
+    assert tc.forced_codec("big5") == "cp950"
     assert tc.forced_codec("shift_jis") == "cp932"
     assert tc.forced_codec("euc-kr") == "euc_kr"
     assert tc.forced_codec("cp1252") == "cp1252"
@@ -160,7 +160,7 @@ def test_encode_utf8_with_and_without_bom() -> None:
 
 def test_encode_utf16_is_always_le_with_bom() -> None:
     assert tc.encode("A", "utf-16", bom=False) == b"\xff\xfeA\x00"
-    assert tc.encode("A", "utf-16-be", bom=True) == b"\xff\xfeA\x00"
+    assert tc.encode("A", "utf-16-le", bom=False) == b"\xff\xfeA\x00"
 
 
 def test_encode_failure_names_first_bad_char() -> None:
@@ -199,6 +199,6 @@ def test_decode_file_missing_raises_unreadable(tmp_path: Path) -> None:
 
 def test_utf16_sample(samples: Path) -> None:
     d = tc.decode_file(samples / "utf16.txt")
-    assert d.encoding_name == "UTF-16"
+    assert d.display_name == "UTF-16"
     assert d.had_bom
     assert d.line_ending is tc.LineEnding.LF

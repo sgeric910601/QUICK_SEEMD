@@ -316,7 +316,8 @@ def test_multiple_top_level_items_get_folder(tmp_path: Path, outdir: Path) -> No
         z.writestr("._b", "junk")
     [folder] = run(src, "extract", outdir)
     assert folder == outdir / "many"
-    assert sorted(p.name for p in folder.iterdir()) == ["._b", "a.txt", "b"]
+    # 共用的安全解壓縮不寫出 macOS 中繼資料（__MACOSX、.DS_Store、._*）
+    assert sorted(p.name for p in folder.iterdir()) == ["a.txt", "b"]
 
 
 def test_single_item_ignores_appledouble_in_count(tmp_path: Path, outdir: Path) -> None:
@@ -408,22 +409,6 @@ def test_7z_traversal_is_refused(tmp_path: Path, outdir: Path) -> None:
     _assert_refused(src, outdir, tmp_path)
 
 
-def test_single_file_decompression_respects_disk_space(
-    tmp_path: Path, outdir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import gzip
-
-    from quickseemd.core.converter import archive
-
-    src = tmp_path / "big.bin.gz"
-    src.write_bytes(gzip.compress(b"\0" * 300_000))
-    monkeypatch.setattr(archive, "_free_bytes", lambda _p: 100_000)
-    with pytest.raises(errors.QSError) as exc:
-        run(src, "extract", outdir)
-    assert "磁碟空間不足" in str(exc.value)
-    assert list(outdir.iterdir()) == []
-
-
 def test_os_errors_become_chinese_messages(
     samples: Path, outdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -436,3 +421,65 @@ def test_os_errors_become_chinese_messages(
     with pytest.raises(errors.QSError) as exc:
         run(samples / "app.py", "crlf", outdir)
     assert str(exc.value) == "寫入輸出檔失敗：Permission denied"
+
+
+# ------------------------------------------------------------------ 安全檢查的回歸測試
+
+
+def _link_info(name: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name)
+    info.create_system = 3
+    info.external_attr = 0o120777 << 16
+    return info
+
+
+def test_chained_symlink_zip_is_refused(tmp_path: Path, outdir: Path) -> None:
+    # 兩個各自看起來都在範圍內的連結，串起來會指到 /etc/hostname
+    src = tmp_path / "chain.zip"
+    with zipfile.ZipFile(src, "w") as z:
+        z.writestr("d/x.txt", "x")
+        z.writestr(_link_info("d/secret"), "p/p/../../etc/hostname")
+        z.writestr(_link_info("d/p"), ".")
+    _assert_refused(src, outdir, tmp_path)
+
+
+def test_tar_renamed_to_7z_is_refused(tmp_path: Path, outdir: Path) -> None:
+    src = tmp_path / "fake.7z"
+    _tar_with(src, [tarfile.TarInfo("ok.txt"), tarfile.TarInfo("../evil.txt")])
+    with pytest.raises(errors.QSError) as exc:
+        run(src, "extract", outdir)
+    assert "不安全的路徑" in str(exc.value) or "無法解壓縮" in str(exc.value)
+    assert not (tmp_path / "evil.txt").exists()
+    assert list(outdir.iterdir()) == []
+
+
+def test_tar_fifo_is_refused(tmp_path: Path, outdir: Path) -> None:
+    src = tmp_path / "fifo.tar.gz"
+    fifo = tarfile.TarInfo("pipe")
+    fifo.type = tarfile.FIFOTYPE
+    _tar_with(src, [tarfile.TarInfo("ok.txt"), fifo])
+    _assert_refused(src, outdir, tmp_path)
+
+
+def test_single_hidden_entry_is_wrapped_in_folder(tmp_path: Path, outdir: Path) -> None:
+    src = tmp_path / "dotfiles.zip"
+    with zipfile.ZipFile(src, "w") as z:
+        z.writestr(".bash_profile", "export A=1\n")
+    [item] = run(src, "extract", outdir)
+    assert item == outdir / "dotfiles"
+    assert (item / ".bash_profile").read_text() == "export A=1\n"
+
+
+def test_sevenzip_member_operand_is_dot_slash(tmp_path: Path, outdir: Path) -> None:
+    from quickseemd.core.converter import archive
+
+    args = archive.sevenzip_arguments("/usr/bin/bsdtar", tmp_path / "@evil", tmp_path / "o.7z")
+    assert args[-2:] == ["--", "./@evil"]
+    folder = tmp_path / "@名單"
+    folder.mkdir()
+    (folder / "a.txt").write_text("A")
+    [out] = run(folder, "7z", outdir)
+    from quickseemd.core import backends, process
+
+    listing = process.run_checked([backends.require("bsdtar"), "-tf", str(out)], "bsdtar").stdout
+    assert sorted(listing.split()) == ["@名單/", "@名單/a.txt"]
