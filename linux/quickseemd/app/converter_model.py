@@ -87,20 +87,38 @@ def _flags(mime: str) -> dict[str, bool]:
     }
 
 
+def _describe(path: Path, fallback_kind: str) -> tuple[str, str | None]:
+    """轉換引擎的「種類、細節」（例如「純文字」「UTF-8 · LF」）；失敗時用 MIME 的說明。"""
+    try:
+        kind, detail = converter.describe(path)
+    except NotImplementedError:
+        return fallback_kind, None
+    except Exception:  # noqa: BLE001 — 細節讀不到不影響轉換
+        LOG.exception("讀取檔案細節失敗：%s", path)
+        return fallback_kind, None
+    return (kind or fallback_kind), (detail or None)
+
+
 def analyze_path(path: Path) -> Analysis:
-    """在背景執行緒呼叫：問轉換引擎能轉成什麼、哪些做不到。"""
+    """在背景執行緒呼叫：問轉換引擎能轉成什麼、哪些做不到、檔案的種類與細節。"""
     ref = filetypes.file_ref(path)
-    kind = "資料夾" if ref.is_dir else filetypes.describe(ref.mime)
+    mime_kind = "資料夾" if ref.is_dir else filetypes.describe(ref.mime)
     flags = {} if ref.is_dir else _flags(ref.mime)
     try:
         targets = tuple(converter.targets_for(path))
         unavailable = tuple(converter.unavailable(path))
     except NotImplementedError:
-        return Analysis((), (), kind, None, engine_missing=True, **flags)
+        return Analysis((), (), mime_kind, None, engine_missing=True, **flags)
     except Exception:  # noqa: BLE001 — 單一檔案分析失敗只讓它沒有可用格式
         LOG.exception("分析檔案失敗：%s", path)
-        return Analysis((), (), kind, None, **flags)
-    return Analysis(targets, unavailable, kind, None, **flags)
+        return Analysis((), (), mime_kind, None, **flags)
+    kind, detail = _describe(path, mime_kind)
+    return Analysis(targets, unavailable, kind, detail, **flags)
+
+
+def encoding_of(detail: str) -> str:
+    """細節「UTF-8 · LF」裡的編碼（「 · 」之前）。"""
+    return detail.split(" · ", 1)[0].strip()
 
 
 # ---------------------------------------------------------------- 工作
@@ -373,10 +391,11 @@ class ConverterModel:
         return [s for s in SECTIONS if s in found]
 
     def detected_encoding(self) -> str | None:
-        details = [j.detail for j in self.scope_jobs() if j.is_textual and j.detail]
-        if not details:
+        """「偵測到：…」：範圍內文字檔的編碼，不一樣時是「多種編碼」。"""
+        encs = [encoding_of(j.detail) for j in self.scope_jobs() if j.is_textual and j.detail]
+        if not encs:
             return None
-        return details[0] if all(d == details[0] for d in details) else "多種編碼"
+        return encs[0] if all(e == encs[0] for e in encs) else "多種編碼"
 
     def set_option(self, key: str, value: Any) -> None:
         if key not in OPTION_DEFAULTS:

@@ -265,8 +265,11 @@ class FileThumb(Gtk.Box):
         super().__init__(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, hexpand=False)
         self.set_size_request(width, height)
         self._path = path
+        self._w, self._h = width, height
         icon_img = mime_icon(path, int(min(width, height) * 0.6))
-        icon_img.set_hexpand(True)
+        icon_img.set_halign(Gtk.Align.CENTER)
+        icon_img.set_valign(Gtk.Align.CENTER)
+        icon_img.set_size_request(width, height)
         self.append(icon_img)
         self._scale = device_scale()
         thumbnails.loader().request(path, width * self._scale, height * self._scale, self._loaded)
@@ -276,13 +279,13 @@ class FileThumb(Gtk.Box):
             return
         texture = Gdk.Texture.new_for_pixbuf(pixbuf)
         paintable = texture if self._scale == 1 else ScaledPaintable(texture, self._scale)
-        pic = Gtk.Picture.new_for_paintable(paintable)
-        pic.set_content_fit(Gtk.ContentFit.CONTAIN)
-        pic.set_can_shrink(True)
-        pic.set_hexpand(True)
-        pic.add_css_class("qs-thumb")
+        # Gtk.Image 以固定大小畫（Gtk.Picture 會依高度等比放大自然寬度，把版面撐開）
+        img = Gtk.Image.new_from_paintable(paintable)
+        img.set_pixel_size(min(self._w, self._h))
+        img.set_size_request(self._w, self._h)
+        img.add_css_class("qs-thumb")
         clear(self)
-        self.append(pic)
+        self.append(img)
 
 
 def file_meta(path: Path) -> str:

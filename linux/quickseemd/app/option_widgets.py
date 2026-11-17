@@ -365,6 +365,9 @@ class TextControl(Control):
         text = "" if self.value is None else str(self.value)
         if self._entry.get_text() != text:
             self._entry.set_text(text)
+        hint = self.state.placeholder(self.opt, self.placeholder())
+        if self._entry.get_property("placeholder-text") != hint:
+            self._entry.set_property("placeholder-text", hint)
 
 
 class PasswordControl(TextControl):

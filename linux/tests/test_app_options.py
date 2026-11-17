@@ -236,3 +236,33 @@ def test_adjust_hook_errors_are_ignored():
     st = om.OptionsState(tool)
     st.set_value("a", True)
     assert st.values["a"] is True
+
+
+def test_dynamic_placeholder():
+    from dataclasses import dataclass
+    from typing import Any
+
+    from quickseemd.core.model import PDF, ToolDefinition
+
+    @dataclass(frozen=True)
+    class _Opt(Option):
+        dynamic_placeholder: Any = None
+
+    name = _Opt(
+        "name",
+        Kind.TEXT,
+        placeholder="固定",
+        default="",
+        dynamic_placeholder=lambda v, i: f"{i['first_base']}-已合併" if "first_base" in i else None,
+    )
+    plain = Option("p", Kind.TEXT, placeholder="固定", default="")
+    tool = ToolDefinition(
+        "test.ph", PDF, "p", "p", "questionmark", lambda f, v, c: [], options=(name, plain)
+    )
+    st = om.OptionsState(tool)
+    assert st.placeholder(name) == "固定"
+    st.set_info({"first_base": "報告"})
+    assert st.placeholder(name) == "報告-已合併"
+    assert st.placeholder(plain) == "固定"
+    broken = _Opt("b", Kind.TEXT, placeholder="備用", dynamic_placeholder=lambda v, i: 1 / 0)
+    assert st.placeholder(broken) == "備用"

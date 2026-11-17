@@ -139,8 +139,12 @@ def test_hub_sections_filter_by_query_and_inbox(fake_tools, files):
     tools = registry.all_tools()
     secs = routing.hub_sections(None, tools, "allkinds", [])
     assert [t.id for _, lst in secs for t in lst] == ["test.all-kinds"]
-    secs = routing.hub_sections(PDF, tools, "", [file_ref(files["c.png"])])
-    assert secs == []
+    png = file_ref(files["c.png"])
+    secs = routing.hub_sections(PDF, tools, "", [png])
+    # PDF 段落剛好列出能接受圖片的 PDF 工具（例如圖片轉 PDF）；沒有的話整段不顯示
+    expected = [t.id for t in tools if t.category.id == "pdf" and t.accepts_ref(png)]
+    assert [t.id for _, lst in secs for t in lst] == expected
+    assert all(cat.id == "pdf" for cat, _ in secs)
     secs = routing.hub_sections(IMAGE, tools, "", [file_ref(files["c.png"])])
     ids = [t.id for _, lst in secs for t in lst]
     assert "test.crop" in ids and "test.all-kinds" in ids
