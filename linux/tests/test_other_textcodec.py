@@ -270,3 +270,11 @@ def test_scriptfit():
     assert scriptfit.plausibility("ja", "ひらがな") == 1.0
     assert scriptfit.plausibility("latin", "Café crème déjà vu") == 1.0
     assert scriptfit.plausibility("latin", "µÚÒ»ÐÐ") < 0.3
+
+
+def test_strict_fallback_prefers_plausible_text(monkeypatch):
+    """統計偵測沒結果時，挑能解開且最像該語言的編碼（簡體不會被當成 Big5）。"""
+    monkeypatch.setattr(tc, "_statistical_guess", lambda data, candidates: None)
+    assert tc.decode(CN.encode("gb18030")).display_name == "GB18030"
+    assert tc.decode(TW.encode("cp950")).display_name == "Big5"
+    assert tc.decode(KR.encode("euc_kr")).display_name == "EUC-KR"

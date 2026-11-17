@@ -24,7 +24,7 @@ def _check_readable(path: Path) -> None:
 def extract_one(archive: Path, ctx: ToolContext) -> Path:
     """解開一個壓縮檔並交付（單一最上層項目交付它本身，否則交付「主檔名」資料夾）。"""
     kind = archive_kind(archive)
-    if kind is None:
+    if kind is None or not archive.is_file():
         raise errors.unsupported_target(archive.name, TARGET_LABEL)
     _check_readable(archive)
     work = ctx.make_work_dir(ctx.output_directory(archive))

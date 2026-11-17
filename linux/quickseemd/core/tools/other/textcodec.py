@@ -223,17 +223,33 @@ def _utf16_without_bom(data: bytes) -> Decoded | None:
     return None
 
 
-def _decode_legacy(data: bytes) -> Decoded:
-    guessed = _statistical_guess(data, DETECT_CANDIDATES)
+def _best_strict(data: bytes, candidates: tuple[str, ...]) -> tuple[str, str] | None:
+    """統計偵測沒有結果時：在能嚴格解開的編碼裡挑文字最像該語言的（平手時照 candidates 順序）。"""
+    best: tuple[float, tuple[str, str]] | None = None
+    for enc in candidates:
+        hit = _try_decode(data, enc)
+        if hit is None:
+            continue
+        fit = scriptfit.plausibility(_FAMILY.get(enc, "latin"), hit[0])
+        if best is None or fit > best[0]:
+            best = (fit, hit)
+    return best[1] if best else None
+
+
+def _guess_and_decode(data: bytes, candidates: tuple[str, ...]) -> tuple[str, str] | None:
+    guessed = _statistical_guess(data, candidates)
     if guessed is not None:
         hit = _try_decode(data, guessed)
         if hit is not None:
-            return Decoded(hit[0], hit[1], False)
-    for enc in DETECT_CANDIDATES:
-        hit = _try_decode(data, enc)
-        if hit is not None:
-            return Decoded(hit[0], hit[1], False)
-    raise errors.unreadable("無法辨識文字編碼，請在選項中手動指定來源編碼。")
+            return hit
+    return _best_strict(data, tuple(c for c in candidates if c != MAC_ROMAN))
+
+
+def _decode_legacy(data: bytes) -> Decoded:
+    hit = _guess_and_decode(data, DETECT_CANDIDATES)
+    if hit is None:
+        raise errors.unreadable("無法辨識文字編碼，請在選項中手動指定來源編碼。")
+    return Decoded(hit[0], hit[1], False)
 
 
 def decode(data: bytes, forced: str | None = None) -> Decoded:
@@ -268,13 +284,8 @@ def detect_legacy_encoding(data: bytes) -> str | None:
     """沒有標記編碼的位元組（例如舊式 ZIP 檔名）最可能的編碼；UTF-8 優先，認不出來回傳 None。"""
     if _strict(data, UTF8) is not None:
         return UTF8
-    guessed = _statistical_guess(data, _NAME_CANDIDATES)
-    order = ((guessed,) if guessed else ()) + _NAME_CANDIDATES
-    for enc in order:
-        hit = _try_decode(data, enc)
-        if hit is not None:
-            return hit[1]
-    return None
+    hit = _guess_and_decode(data, _NAME_CANDIDATES)
+    return hit[1] if hit is not None else None
 
 
 def read_error_text(path: Path, exc: OSError) -> str:
@@ -426,15 +437,9 @@ def normalize_newlines(text: str) -> tuple[str, str]:
 
 
 def _lenient_legacy(data: bytes) -> tuple[str, str]:
-    guessed = _statistical_guess(data, LENIENT_CANDIDATES)
-    if guessed is not None:
-        hit = _try_decode(data, guessed)
-        if hit is not None:
-            return hit[0], display_name(hit[1])
-    for enc in LENIENT_CANDIDATES[:-1]:
-        hit = _try_decode(data, enc)
-        if hit is not None:
-            return hit[0], display_name(hit[1])
+    hit = _guess_and_decode(data, LENIENT_CANDIDATES)
+    if hit is not None:
+        return hit[0], display_name(hit[1])
     return data.decode(LATIN1), "ISO Latin-1"
 
 

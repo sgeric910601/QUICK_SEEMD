@@ -68,7 +68,11 @@ def _walk(directory: Path, prefix: str) -> list[Entry]:
     for child in children:
         if child.name in JUNK_NAMES:
             continue
-        st = child.stat(follow_symlinks=False)
+        try:
+            st = child.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            log.info("壓縮時檔案已不見，略過：%s", child.path)
+            continue
         if child.name in JUNK_DIRS and stat.S_ISDIR(st.st_mode):
             continue
         entry = _entry_for(Path(child.path), f"{prefix}/{child.name}", st)

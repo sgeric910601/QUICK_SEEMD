@@ -724,3 +724,10 @@ def test_verify_tree_rejects_special_files(tmp_path):
     os.mkfifo(tmp_path / "pipe")
     with pytest.raises(UnsafeEntry):
         verify_tree(tmp_path)
+
+
+def test_fifo_named_like_archive_is_refused(indir):
+    os.mkfifo(indir / "pipe.zip")
+    with pytest.raises(errors.QSError) as exc:
+        _run([indir / "pipe.zip"])
+    assert str(exc.value) == "「pipe.zip」無法轉換成 解壓縮到資料夾。"

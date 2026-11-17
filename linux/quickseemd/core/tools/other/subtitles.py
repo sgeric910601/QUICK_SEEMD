@@ -131,11 +131,20 @@ def convert_one(path: Path, target: str, shift: float, ctx: ToolContext) -> Path
     return ctx.deliver(tmp, ctx.output_name(path, tag, target), path)
 
 
+def _shift_value(raw: object) -> float:
+    """選項值 → 限制在 −10…10 秒的位移；不是數字時丟出中文錯誤。"""
+    try:
+        value = float(raw or 0.0)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise errors.QSError(f"時間位移必須是數字：{raw}") from exc
+    return max(-SHIFT_LIMIT, min(SHIFT_LIMIT, value))
+
+
 def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
     target = str(values.get("target") or "vtt")
     if target not in ("vtt", "srt"):
         raise errors.QSError(f"不支援的字幕格式：{target}")
-    shift = max(-SHIFT_LIMIT, min(SHIFT_LIMIT, float(values.get("shift") or 0.0)))
+    shift = _shift_value(values.get("shift"))
     return per_file(files, ctx, lambda f, sub: [convert_one(f, target, shift, sub)])
 
 

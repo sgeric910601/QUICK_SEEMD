@@ -178,3 +178,11 @@ def test_tool_shift_is_clamped(tmp_path, outdir):
     src.write_bytes(b"1\n00:00:30,000 --> 00:00:31,000\nA\n")
     [out] = _run([src], outdir, target="srt", shift=99)
     assert "00:00:40,000 --> 00:00:41,000" in out.read_text("utf-8")
+
+
+def test_tool_shift_must_be_number(tmp_path):
+    src = tmp_path / "a.srt"
+    src.write_text(SRT)
+    with pytest.raises(errors.QSError) as exc:
+        _run([src], shift="快一點")
+    assert str(exc.value) == "時間位移必須是數字：快一點"

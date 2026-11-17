@@ -88,8 +88,8 @@ def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
         raise errors.QSError(NONE_SELECTED)
     report = ""
     for i, f in enumerate(files):
-        if f.is_dir():
-            continue
+        if not f.is_file():
+            continue  # 資料夾略過（同原版）；管線等特殊檔讀了會卡住，也略過
         ctx.check_cancelled()
         digests = hash_file(f, algorithms, ctx.segment(i, len(files)))
         report += report_block(f.name, algorithms, digests)

@@ -108,3 +108,14 @@ def test_unreadable_file(tmp_path, outdir):
         assert str(exc.value).startswith("無法讀取檔案內容：")
     finally:
         f.chmod(0o644)
+
+
+def test_special_files_are_skipped(tmp_path, outdir):
+    import os
+
+    os.mkfifo(tmp_path / "pipe")
+    f = tmp_path / "hello.txt"
+    f.write_bytes(b"hello")
+    [out], _ = _run([tmp_path / "pipe", f], outdir, md5=False)
+    assert out == outdir / "pipe-校驗碼.txt"
+    assert out.read_text("utf-8") == f"hello.txt\n  SHA-256  {HELLO_256}\n\n"
