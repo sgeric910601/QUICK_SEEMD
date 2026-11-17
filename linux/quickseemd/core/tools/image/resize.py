@@ -14,6 +14,7 @@ from . import colors, icon_io, pipeline, writer
 from .common import color_option, color_value, count, define, dynamic_note, percent_text
 
 LIMIT = 32768
+CUSTOM_PAD = "#808080"  # 原版 SwiftUI Color.gray
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ class ResizeOptions:
             percent=float(v.get("custom_percent", 60)) if choice == 0 else float(choice),
             preset=str(v.get("preset", "w1920")),
             fit=str(v.get("fit", "fill")),
-            pad=color_value(v, "pad", colors.GRAY),
+            pad=color_value(v, "pad", CUSTOM_PAD),
             no_upscale=bool(v.get("no_upscale", True)),
             smooth=bool(v.get("smooth", True)),
         )
@@ -211,6 +212,19 @@ def validate(files: list[Path], values: Values, info: Info) -> str | None:
     return None
 
 
+def adjust(values: Values, changed: str, info: Info) -> Values:
+    """鎖定比例時，改寬度就跟著改高度、改高度就跟著改寬度；打開鎖定時以寬度為準。"""
+    size = pipeline.first_size(info)
+    if size is None or not values.get("lock_aspect", True):
+        return {}
+    w, h = int(values.get("width") or 0), int(values.get("height") or 0)
+    if changed in ("width", "lock_aspect") and w > 0:
+        return {"height": max(1, _r(w * size[1] / size[0]))}
+    if changed == "height" and h > 0:
+        return {"width": max(1, _r(h * size[0] / size[1]))}
+    return {}
+
+
 def prefill(files: list[Path], info: Info) -> Values:
     size = pipeline.first_size(info)
     return {"width": size[0], "height": size[1]} if size else {}
@@ -330,6 +344,7 @@ OPTIONS: tuple[Option, ...] = (
         "底色",
         (colors.WHITE_CHOICE, colors.BLACK_CHOICE, colors.TRANSPARENT_CHOICE, colors.CUSTOM_CHOICE),
         "#ffffff",
+        custom_default=CUSTOM_PAD,
         group="比例不同時",
         visible=lambda v, i: _fixed_box(v, i) and v.get("fit") == "fit",
     ),
@@ -377,4 +392,5 @@ TOOL = define(
     presets={"image.resize-half": {"mode": "percent", "percent": 50}},
     prefill=prefill,
     validate=validate,
+    adjust=adjust,
 )

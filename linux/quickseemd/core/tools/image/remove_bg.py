@@ -19,7 +19,7 @@ from . import colors, formats, loader, pipeline, writer
 from .common import color_option, color_value, define
 
 HELPER = Path(__file__).resolve().with_name("rembg_helper.py")
-CUSTOM_COLOR = colors.Rgba(0.85, 0.92, 1)
+CUSTOM_COLOR = "#d9ebff"  # 原版 (0.85, 0.92, 1)
 NEED_ENGINE = "需要安裝去背元件"
 _FORMATS = (Choice("png", "PNG"), Choice("heic", "HEIC"), Choice("jpeg", "JPG"))
 
@@ -190,6 +190,7 @@ OPTIONS: tuple[Option, ...] = (
         "背景顏色",
         (colors.CUSTOM_CHOICE,),
         "custom",
+        custom_default=CUSTOM_COLOR,
         group="新的背景",
         visible=lambda v, i: v.get("background") == "custom",
     ),
