@@ -16,7 +16,7 @@ from conftest import LINUX_DIR, make_image
 from PIL import Image
 
 from quickseemd.core import backends, errors, process
-from quickseemd.core.tools.image import formats, icon_io, limits, loader
+from quickseemd.core.tools.image import formats, heif, icon_io, limits, loader
 
 # 和正式執行一樣把 Pillow 的炸彈警告當成錯誤（pytest 每個測試會重設警告過濾）
 pytestmark = pytest.mark.filterwarnings("error::PIL.Image.DecompressionBombWarning")
@@ -218,3 +218,172 @@ def test_huge_svg_refused_under_memory_cap(tmp_path):
 
 def test_writable_check_unaffected():
     assert formats.is_writable("png")
+
+
+# ------------------------------------------------------------------ 不確定就拒絕（HEIF、SVG、動畫）
+
+
+def _small_heic(tmp_path: Path) -> Path:
+    if not backends.available("heif-enc"):
+        pytest.skip("沒有 heif-enc")
+    png = make_image(tmp_path / "a.png", size=(64, 48))
+    heic = tmp_path / "a.heic"
+    process.run_checked([backends.require("heif-enc"), "-q", "50", "-o", str(heic), str(png)], "x")
+    return heic
+
+
+def test_heif_without_ispe_is_refused(tmp_path):
+    heic = _small_heic(tmp_path)
+    data = heic.read_bytes().replace(b"ispe", b"xxxx")
+    # 在 meta 以外的地方放一個看起來像 ispe 的假資料，不能被當成尺寸
+    fake = b"ispe" + bytes(4) + struct.pack(">II", 8, 8)
+    data += struct.pack(">I", 8 + len(fake)) + b"free" + fake
+    bad = tmp_path / "沒有尺寸.heic"
+    bad.write_bytes(data)
+    assert heif.dimensions(bad) is None
+    with pytest.raises(errors.QSError, match="無法判斷「沒有尺寸.heic」的圖片尺寸。"):
+        loader.load(bad)
+
+
+def test_heif_box_walker_is_bounded(tmp_path):
+    heic = _small_heic(tmp_path)
+    w, h = heif.dimensions(heic)
+    assert w >= 64 and h >= 48
+    raw = heic.read_bytes()
+    truncated = tmp_path / "截斷.heic"
+    truncated.write_bytes(raw[:40])
+    assert heif.dimensions(truncated) is None
+    lying = bytearray(raw)
+    lying[0:4] = struct.pack(">I", 0xFFFFFFF0)  # ftyp 宣稱比檔案還大
+    liar = tmp_path / "說謊.heic"
+    liar.write_bytes(bytes(lying))
+    assert heif.dimensions(liar) is None
+    endless = tmp_path / "很多盒子.heic"
+    endless.write_bytes(raw[:32] + (struct.pack(">I", 8) + b"free") * 10000)
+    assert heif.dimensions(endless) is None
+
+
+def test_svg_with_zero_or_bad_size_is_refused(tmp_path):
+    zero = tmp_path / "零.svg"
+    zero.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0">'
+        '<rect width="10" height="10"/></svg>'
+    )
+    with pytest.raises(errors.QSError, match="零.svg"):
+        loader.load(zero)
+
+
+def test_svg_rendering_is_bounded_by_checked_size(tmp_path, monkeypatch):
+    import types
+
+    svg = tmp_path / "a.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30">'
+        '<rect width="40" height="30" fill="red"/></svg>'
+    )
+    gdk, glib = loader._gdk_pixbuf()  # noqa: SLF001 — 測試替換尺寸查詢
+
+    class Pixbuf:
+        get_file_info = staticmethod(lambda path: (gdk.Pixbuf.get_file_info(path)[0], 100, 50))
+        new_from_file_at_scale = staticmethod(gdk.Pixbuf.new_from_file_at_scale)
+
+    monkeypatch.setattr(loader, "_gdk_pixbuf", lambda: (types.SimpleNamespace(Pixbuf=Pixbuf), glib))
+    assert loader.load(svg).size == (100, 50)  # 點陣化的大小就是檢查過的大小
+
+    class Negative(Pixbuf):
+        get_file_info = staticmethod(lambda path: (gdk.Pixbuf.get_file_info(path)[0], -1, 30))
+
+    monkeypatch.setattr(
+        loader, "_gdk_pixbuf", lambda: (types.SimpleNamespace(Pixbuf=Negative), glib)
+    )
+    with pytest.raises(errors.QSError, match="無法判斷「a.svg」的圖片尺寸。"):
+        loader.load(svg)
+
+
+def literal_lzw(pixels: int) -> bytes:
+    """GIF 的 LZW 資料：全部是索引 0，每兩個點送一次清除碼，碼長固定 3 位元。"""
+    codes: list[int] = []
+    for i in range(pixels):
+        if i % 2 == 0:
+            codes.append(4)  # 清除碼
+        codes.append(0)
+    codes.append(5)  # 結束碼
+    acc = nbits = 0
+    packed = bytearray()
+    for code in codes:
+        acc |= code << nbits
+        nbits += 3
+        while nbits >= 8:
+            packed.append(acc & 0xFF)
+            acc >>= 8
+            nbits -= 8
+    if nbits:
+        packed.append(acc & 0xFF)
+    blocks = b"".join(
+        bytes([len(packed[i : i + 255])]) + bytes(packed[i : i + 255])
+        for i in range(0, len(packed), 255)
+    )
+    return b"\x02" + blocks + b"\x00"
+
+
+ONE_PIXEL = literal_lzw(1)
+
+
+def raw_gif(frames: list[tuple[int, int]], screen: tuple[int, int] = (10, 10)) -> bytes:
+    """手工組的 GIF：每格從左上角開始；大格只放 1 個點的資料（解碼前就該被擋下）。"""
+    out = bytearray(b"GIF89a" + struct.pack("<HH", *screen) + bytes([0x80, 0, 0]))
+    out += b"\x00\x00\x00\xff\xff\xff"
+    out += b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00"
+    for w, h in frames:
+        out += b"\x21\xf9\x04\x00\x0a\x00\x00\x00"
+        out += b"\x2c" + struct.pack("<HHHH", 0, 0, w, h) + b"\x00"
+        out += literal_lzw(w * h) if w * h <= 250_000 else ONE_PIXEL
+    return bytes(out + b"\x3b")
+
+
+def test_gif_running_total_counts_later_frames(tmp_path, monkeypatch):
+    p = tmp_path / "越來越大.gif"
+    p.write_bytes(raw_gif([(10, 10), (200, 200), (200, 200)]))
+    assert len(loader.load(p, all_frames=True).frames) == 3
+    monkeypatch.setattr(limits, "MAX_PIXELS", 50_000)  # 單格 4 萬像素可以，合計就超過
+    with pytest.raises(errors.QSError, match="超過可以處理的上限"):
+        loader.load(p, all_frames=True)
+    assert loader.load(p).size == (10, 10)  # 只讀第一格不受影響
+
+
+def test_gif_frame_count_cap(tmp_path, monkeypatch):
+    p = tmp_path / "很多格.gif"
+    p.write_bytes(raw_gif([(1, 1)] * 30))
+    monkeypatch.setattr(limits, "MAX_FRAMES", 20)
+    with pytest.raises(errors.QSError, match="動畫的畫格太多（超過 20 格），超過可以處理的上限。"):
+        loader.load(p, all_frames=True)
+    monkeypatch.setattr(limits, "MAX_FRAMES", 30)
+    assert len(loader.load(p, all_frames=True).frames) == 30
+
+
+_LOAD_ALL_FRAMES = (
+    "from quickseemd.core import errors\n"
+    "from quickseemd.core.tools.image import loader\n"
+    "try:\n"
+    "    loader.load(sys.argv[1], all_frames=True)\n"
+    "    print(json.dumps({'error': None}))\n"
+    "except errors.QSError as exc:\n"
+    "    print(json.dumps({'error': str(exc)}, ensure_ascii=False))\n"
+)
+
+
+def test_gif_bigger_later_frame_fails_fast_under_memory_cap(tmp_path):
+    p = tmp_path / "第二格很大.gif"
+    p.write_bytes(raw_gif([(10, 10), (20000, 20000)]))
+    assert p.stat().st_size < 1000
+    out = _capped_python(_LOAD_ALL_FRAMES, str(p))
+    assert out["error"] == BOMB_MESSAGE
+    assert out["seconds"] < 20
+
+
+def test_gif_huge_frame_count_fails_fast_under_memory_cap(tmp_path):
+    p = tmp_path / "十萬格.gif"
+    p.write_bytes(raw_gif([(1, 1)] * 100_000))
+    out = _capped_python(_LOAD_ALL_FRAMES, str(p))
+    assert out["error"] == "動畫的畫格太多（超過 2000 格），超過可以處理的上限。"
+    assert out["seconds"] < 20
