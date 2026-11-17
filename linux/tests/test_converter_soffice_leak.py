@@ -167,3 +167,53 @@ def test_missing_bwrap_warns_once(
         assert soffice.sandbox_prefix(tmp_path) == []
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
+
+
+# ------------------------------------------------------------------ 依內容判斷點陣圖
+
+
+def test_raster_is_judged_by_content(tmp_path: Path, secret_png: Path) -> None:
+    import io
+
+    buf = io.BytesIO()
+    Image.new("RGB", (3, 3), "blue").save(buf, "PNG")
+    real_png = base64.b64encode(buf.getvalue()).decode()
+    svg_b64 = base64.b64encode(_svg(secret_png).encode()).decode()
+    (tmp_path / "fake.png").write_text(_svg(secret_png))
+    (tmp_path / "real.dat").write_bytes(buf.getvalue())  # 副檔名不對但內容是 PNG
+    markup = (
+        f'<img src="fake.png"><img src="data:image/png;base64,{svg_b64}">'
+        f'<img src="data:image/gif;base64,{real_png}"><img src="real.dat">'
+        '<img src="data:image/png,%89PNG"><img src="data:image/png;base64,@@@">'
+    )
+    clean = htmlsafe.sanitize(markup, tmp_path)
+    assert svg_b64 not in clean and "fake.png" not in clean and "svg" not in clean.lower()
+    # 標成 GIF 的 PNG 改用實際的類型；副檔名不對的 PNG 也照內容內嵌
+    assert clean.count(f'src="data:image/png;base64,{real_png}"') == 2
+    assert "data:image/gif" not in clean
+    assert "%89PNG" not in clean and "@@@" not in clean
+    assert htmlsafe.sniff_raster(b"BM" + b"\x00" * 12 + (40).to_bytes(4, "little")) == "image/bmp"
+    assert htmlsafe.sniff_raster(b"BMx" + b"\x00" * 20) is None
+    assert htmlsafe.sniff_raster(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == "image/webp"
+
+
+@pytest.mark.slow
+def test_disguised_svgs_embed_nothing(tmp_path: Path, outdir: Path, secret_png: Path) -> None:
+    from quickseemd.core.converter import convert
+    from quickseemd.core.model import ToolContext
+
+    (tmp_path / "fake.png").write_text(_svg(secret_png))
+    svg_b64 = base64.b64encode(_svg(secret_png).encode()).decode()
+    page = tmp_path / "page.html"
+    page.write_text(
+        f'<html><body><p>x</p><img src="fake.png" width="40" height="40">'
+        f'<img src="data:image/png;base64,{svg_b64}" width="40" height="40"></body></html>'
+    )
+    ctx = ToolContext(outdir)
+    try:
+        [docx] = convert(page, "docx", ctx, {})
+    finally:
+        ctx.cleanup()
+    with zipfile.ZipFile(docx) as z:
+        media = [n for n in z.namelist() if "media/" in n]
+    assert media == []

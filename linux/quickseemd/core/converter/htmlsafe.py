@@ -5,9 +5,11 @@ LibreOffice 匯入 HTML 時會去抓 <img>、<link>、CSS 的 url(…) 等資源
 1. 判斷編碼（BOM → <meta charset> → 自動偵測）並轉成 UTF-8；含 NUL 字元的直接拒絕。
 2. 用 html.parser 逐一讀出標籤與文字，再重新輸出（屬性值重新跳脫），不靠正規表示式切標籤。
 3. 會載入資源的寫法：
-   - data: 網址只留點陣圖（PNG、JPEG、GIF、WebP、BMP），SVG 與其他類型一律封鎖；
+   - data: 網址只留點陣圖（PNG、JPEG、GIF、WebP、BMP）：標示的類型與解出來的檔頭都要是點陣圖，
+     輸出時改用檔頭判斷出的類型；SVG 與其他類型一律封鎖；
    - 網址、//、絕對路徑、反斜線開頭的一律封鎖；
-   - 相對路徑用 realpath 解析，必須是基準資料夾裡的點陣圖檔（大小有上限），換成 data: 內嵌；
+   - 相對路徑用 realpath 解析，必須是基準資料夾裡、檔頭確實是點陣圖的檔案（大小有上限），
+     換成 data: 內嵌（不看副檔名）；
    - <link>、<base>、<script>、自動跳轉的 <meta>、註解、處理指令直接拿掉；on… 事件屬性拿掉；
    - <style> 與 style 屬性：@import 拿掉、url(…) 依上面規則處理；含 CSS 跳脫字元（\\）的整段丟棄。
 """
@@ -17,7 +19,6 @@ from __future__ import annotations
 import base64
 import codecs
 import html
-import mimetypes
 import os
 import re
 import stat
@@ -95,32 +96,73 @@ def decode_html(raw: bytes) -> str:
 # ---------------------------------------------------------------- 網址
 
 
+def sniff_raster(data: bytes) -> str | None:
+    """依檔頭（不是副檔名或標示）判斷是不是 PNG／JPEG／GIF／WebP／BMP；不是就回傳 None。"""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if len(data) >= 18 and data[:2] == b"BM":
+        dib = int.from_bytes(data[14:18], "little")
+        return "image/bmp" if dib in (12, 40, 52, 56, 64, 108, 124) else None
+    return None
+
+
+def raster_data_uri(data: bytes) -> str | None:
+    """內容確實是點陣圖時，回傳用偵測到的類型組成的 data: 網址。"""
+    if len(data) > MAX_INLINE_BYTES:
+        return None
+    mime = sniff_raster(data)
+    if mime is None:
+        return None
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+def _decode_data_uri(value: str) -> bytes | None:
+    """data: 網址的內容；只接受 base64，解出來超過上限就放棄。"""
+    head, sep, body = value.partition(",")
+    if not sep or not head.lower().endswith(";base64"):
+        return None
+    if len(body) > MAX_INLINE_BYTES * 4 // 3 + 8:
+        return None
+    try:
+        return base64.b64decode(body, validate=True)
+    except ValueError:
+        return None
+
+
 class Resolver:
     def __init__(self, base_dir: Path) -> None:
         self.root = os.path.realpath(base_dir)
 
     def _inline(self, value: str) -> str | None:
+        """基準資料夾裡、內容確實是點陣圖的檔案 → data: 網址（類型依檔頭判斷）。"""
         real = os.path.realpath(os.path.join(self.root, unquote(value)))
         if not (real == self.root or real.startswith(self.root + os.sep)):
             return None
         try:
             st = os.stat(real)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_INLINE_BYTES:
+                return None
+            with open(real, "rb") as fh:
+                data = fh.read(MAX_INLINE_BYTES + 1)
         except OSError:
             return None
-        mime = (mimetypes.guess_type(real)[0] or "").lower()
-        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_INLINE_BYTES:
-            return None
-        if mime not in RASTER_TYPES:
-            return None
-        with open(real, "rb") as fh:
-            return f"data:{mime};base64,{base64.b64encode(fh.read()).decode('ascii')}"
+        return raster_data_uri(data)
 
     def resolve(self, raw: str) -> str | None:
         """屬性值或 url() 的內容 → 安全的網址；None＝封鎖。"""
         value = _INVISIBLE.sub("", raw)
         if value.lower().startswith("data:"):
             m = _DATA_URI.match(value)
-            return value if m and m.group(1).lower() in RASTER_TYPES else None
+            if not m or m.group(1).lower() not in RASTER_TYPES:
+                return None
+            data = _decode_data_uri(value)
+            return raster_data_uri(data) if data is not None else None
         if not value or _SCHEME.match(value) or value.startswith(("/", "\\")):
             return None
         return self._inline(value)
