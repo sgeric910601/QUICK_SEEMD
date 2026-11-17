@@ -18,6 +18,13 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["FAKE_SOFFICE_LOG"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps(args, ensure_ascii=False) + "\\n")
+copy_to = os.environ.get("FAKE_SOFFICE_COPY_PROFILE")
+if copy_to:
+    prof = next(a for a in args if a.startswith("-env:UserInstallation=file://"))
+    prof = prof[len("-env:UserInstallation=file://"):]
+    with open(os.path.join(prof, "user", "registrymodifications.xcu"), encoding="utf-8") as src:
+        with open(copy_to, "w", encoding="utf-8") as dst:
+            dst.write(src.read())
 mode = os.environ.get("FAKE_SOFFICE_MODE", "ok")
 if mode == "fail":
     sys.stderr.write("Error: source file could not be loaded\\n")
@@ -216,3 +223,65 @@ def test_real_libreoffice_conversion(tmp_path: Path):
     pdf = office.convert_to_pdf(src)
     with pikepdf.open(pdf) as doc:
         assert len(doc.pages) >= 1
+
+
+# ------------------------------------------------------------------ 不能抓取文件裡連結的遠端資源
+
+
+def test_profile_blocks_untrusted_links(tmp_path: Path, fake_soffice: Path, monkeypatch):
+    """每次轉換的設定檔都要先寫好 BlockUntrustedRefererLinks=true。"""
+    seen = tmp_path / "profile-copy.xcu"
+    monkeypatch.setenv("FAKE_SOFFICE_COPY_PROFILE", str(seen))
+    office.convert_to_pdf(_docx(tmp_path))
+    text = seen.read_text("utf-8")
+    assert 'oor:path="/org.openoffice.Office.Common/Security/Scripting"' in text
+    assert '<prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value>' in text
+
+
+def test_profile_helper_never_overwrites(tmp_path: Path):
+    from quickseemd.previewer import soffice_local  # noqa: PLC0415
+
+    profile = tmp_path / "profile"
+    soffice_local.prepare_profile(profile)
+    xcu = profile / "user" / "registrymodifications.xcu"
+    assert xcu.is_file()
+    with pytest.raises(FileExistsError):
+        soffice_local.prepare_profile(profile)
+
+
+def _odt_with_remote_image(path: Path, url: str) -> Path:
+    import zipfile  # noqa: PLC0415
+
+    content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+ xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+ xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+ xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"
+ xmlns:xlink="http://www.w3.org/1999/xlink" office:version="1.2">
+<office:body><office:text><text:p>連結的圖片：
+<draw:frame draw:name="img" svg:width="4cm" svg:height="3cm" text:anchor-type="as-char">
+<draw:image xlink:href="{url}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>
+</draw:frame></text:p></office:text></office:body></office:document-content>"""
+    manifest = """<?xml version="1.0" encoding="UTF-8"?>
+<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
+<manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/>
+<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
+</manifest:manifest>"""
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/vnd.oasis.opendocument.text")
+        z.writestr("META-INF/manifest.xml", manifest, compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("content.xml", content, compress_type=zipfile.ZIP_DEFLATED)
+    return path
+
+
+@pytest.mark.slow
+def test_real_libreoffice_does_not_fetch_linked_images(tmp_path: Path):
+    if backends.find("soffice") is None:
+        pytest.skip("沒有安裝 LibreOffice")
+    from local_http import RecordingServer  # noqa: PLC0415
+
+    with RecordingServer() as server:
+        doc = _odt_with_remote_image(tmp_path / "連結.odt", server.url("/image.png"))
+        pdf = office.convert_to_pdf(doc)
+        assert pdf.is_file()
+        assert server.requests == []

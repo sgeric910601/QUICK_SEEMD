@@ -2,6 +2,7 @@
 
 - 快取檔名：sha1(路徑, 修改時間, 大小).pdf，檔案改過就會重新轉換。
 - 每次轉換用全新的暫存資料夾（LibreOffice 設定檔與輸出資料夾都是這次專用），結束後清掉。
+- 設定檔事先寫好安全設定：不抓文件裡連結的遠端資源、不執行巨集（見 soffice_local）。
 - 轉好的 PDF 以「獨佔建立」放進快取（硬連結），絕不覆蓋已存在的檔案；原始檔完全不動。
 """
 
@@ -14,6 +15,9 @@ import tempfile
 from pathlib import Path
 
 from ..core import backends, errors, naming, process
+
+# 暫代：共用的 quickseemd.core.soffice 合併後改成從那裡匯入同名的兩個函式
+from .soffice_local import convert_args, prepare_profile
 
 log = logging.getLogger(__name__)
 
@@ -38,24 +42,6 @@ def cached_pdf_path(path: Path) -> Path:
     return cache_folder() / f"{cache_key(path)}.pdf"
 
 
-def _arguments(soffice: str, src: Path, profile: Path, outdir: Path) -> list[str]:
-    return [
-        soffice,
-        f"-env:UserInstallation={profile.as_uri()}",
-        "--headless",
-        "--invisible",
-        "--norestore",
-        "--nologo",
-        "--nodefault",
-        "--nolockcheck",
-        "--convert-to",
-        "pdf",
-        "--outdir",
-        str(outdir),
-        str(src),
-    ]
-
-
 def _produced_pdf(outdir: Path) -> Path | None:
     found = [p for p in outdir.iterdir() if p.suffix.lower() == ".pdf" and p.is_file()]
     return found[0] if len(found) == 1 else None
@@ -73,9 +59,9 @@ def _convert_in(work: Path, src: Path, target: Path) -> None:
     soffice = backends.require("soffice")
     profile = work / "profile"
     outdir = work / "out"
-    profile.mkdir()
+    prepare_profile(profile)
     outdir.mkdir()
-    res = process.run(_arguments(soffice, src, profile, outdir), timeout=CONVERT_TIMEOUT)
+    res = process.run(convert_args(soffice, src, profile, outdir), timeout=CONVERT_TIMEOUT)
     produced = _produced_pdf(outdir)
     if res.returncode != 0 or produced is None:
         detail = process.last_lines(res.stderr) or process.last_lines(res.stdout)
