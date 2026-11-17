@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import gzip
 import io
 import lzma
@@ -16,6 +17,9 @@ import pytest
 
 from quickseemd.core.preview import archive, archiveview, engine
 from quickseemd.core.preview.page import Chip, FileInfo
+
+# 覆蓋率量測會讓 Python 慢好幾倍；那時放寬時間上限，平常照原本的預算檢查
+TIME_SCALE = 8.0 if sys.gettrace() is not None else 1.0
 
 
 def _dos(dt: datetime) -> tuple[int, int]:
@@ -331,7 +335,7 @@ def test_decompression_is_bounded(tmp_path: Path) -> None:
     start = time.perf_counter()
     head = archive.decompress_head(bomb, "gzip", info.header_length, 2 * 1024 * 1024)
     assert len(head) == 2 * 1024 * 1024
-    assert time.perf_counter() - start < 1.0
+    assert time.perf_counter() - start < 1.0 * TIME_SCALE
     xz = _write(tmp_path, "bomb.xz", lzma.compress(b"\x00" * (20 * 1024 * 1024)))
     assert len(archive.decompress_head(xz, "xz", 0, 1024)) == 1024
 
@@ -355,7 +359,7 @@ def test_deep_paths_are_bounded(tmp_path: Path) -> None:
     f = _write(tmp_path, "deep.zip", raw_zip([{"name": deep}]))
     start = time.perf_counter()
     doc = engine.render(f)
-    assert time.perf_counter() - start < 2.0
+    assert time.perf_counter() - start < 2.0 * TIME_SCALE
     assert doc.html.count("<details") == archiveview.MAX_DEPTH - 1
 
 
@@ -399,7 +403,7 @@ def test_tar_gz_bomb_is_bounded(tmp_path: Path) -> None:
     assert bomb.stat().st_size < 2_000_000
     start = time.perf_counter()
     doc = engine.render(bomb)
-    assert time.perf_counter() - start < 6.0
+    assert time.perf_counter() - start < 6.0 * TIME_SCALE
     assert doc.kind_label == "TAR.GZ 壓縮檔"
     assert "壓縮檔太大，只列出前面的部分" in doc.html
     assert "big.bin" in doc.html
@@ -469,6 +473,6 @@ def test_inner_gzip_preview_is_bounded(tmp_path: Path) -> None:
     bomb = _streamed_gzip(tmp_path / "zeros.bin.gz", b"", 300)
     start = time.perf_counter()
     doc = engine.render(bomb)
-    assert time.perf_counter() - start < 3.0
+    assert time.perf_counter() - start < 3.0 * TIME_SCALE
     assert doc.kind_label == "gzip 壓縮檔"
     assert "解壓縮後的內容（十六進位）" in doc.html

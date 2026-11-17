@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import os
 from pathlib import Path
 
@@ -14,6 +15,9 @@ PNG = (
     b"\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00"
     b"\x00\x00IEND\xaeB`\x82"
 )
+
+# 覆蓋率量測會讓 Python 慢好幾倍；那時放寬時間上限，平常照原本的預算檢查
+TIME_SCALE = 8.0 if sys.gettrace() is not None else 1.0
 
 
 def md(src: str, base: Path | None = None) -> str:
@@ -207,7 +211,7 @@ def test_hostile_markdown_is_bounded(text: str) -> None:
 
     start = time.perf_counter()
     result = markdown.render(text, None)
-    assert time.perf_counter() - start < 2.5
+    assert time.perf_counter() - start < 2.5 * TIME_SCALE
     assert result.degraded is True
 
 
@@ -224,7 +228,7 @@ def test_table_cell_amplification_is_bounded() -> None:
     wide = "|" + "a|" * 200 + "\n|" + "-|" * 200 + "\n" + "x\n" * 50_000
     start = time.perf_counter()
     result = markdown.render(wide, None)
-    assert time.perf_counter() - start < 2.0
+    assert time.perf_counter() - start < 2.0 * TIME_SCALE
     assert result.degraded is True
     assert "<table>" not in result.html
     small = markdown.render("| a | b |\n|---|---|\n| 1 | 2 |\n", None)

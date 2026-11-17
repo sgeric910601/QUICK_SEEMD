@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import base64
 import hashlib
 import json
@@ -13,6 +14,9 @@ import pytest
 
 from quickseemd.core.preview import jsonview, notebook, sqliteview, tabular
 from quickseemd.core.preview.page import FileInfo
+
+# 覆蓋率量測會讓 Python 慢好幾倍；那時放寬時間上限，平常照原本的預算檢查
+TIME_SCALE = 8.0 if sys.gettrace() is not None else 1.0
 
 
 def chips(page) -> list[str]:  # noqa: ANN001
@@ -102,7 +106,7 @@ def test_csv_hostile_quotes_are_fast() -> None:
     text = ('"' * 7990 + "\n") * 262 + ("a," * 3995 + "\n") * 262
     start = time.perf_counter()
     tabular.render(text, FileInfo.virtual("q.csv"), False)
-    assert time.perf_counter() - start < 1.5
+    assert time.perf_counter() - start < 1.5 * TIME_SCALE
 
 
 # ------------------------------------------------------------------ JSON
@@ -134,14 +138,14 @@ def test_json_pretty_print_output_is_bounded() -> None:
     start = time.perf_counter()
     assert jsonview.pretty_print("[" * 100_000) is None  # 縮排會平方成長
     assert jsonview.pretty_print('{"a":[1]}', limit=5) is None
-    assert time.perf_counter() - start < 1.0
+    assert time.perf_counter() - start < 1.0 * TIME_SCALE
 
 
 def test_json_pretty_print_is_fast() -> None:
     blob = json.dumps([{"id": i, "v": [i, "x" * 5, None]} for i in range(60000)])
     start = time.perf_counter()
     jsonview.pretty_print(blob)
-    assert time.perf_counter() - start < 1.0
+    assert time.perf_counter() - start < 1.0 * TIME_SCALE
 
 
 # ------------------------------------------------------------------ 筆記本
@@ -319,7 +323,7 @@ def test_sqlite_runaway_view_is_aborted(tmp_path: Path, monkeypatch: pytest.Monk
     con.close()
     start = time.perf_counter()
     page = sqliteview.render(FileInfo.of(db))
-    assert time.perf_counter() - start < 2.5
+    assert time.perf_counter() - start < 2.5 * TIME_SCALE
     assert page is not None
     assert '<span class="sub">檢視 · ? · 1 欄</span>' in page.body
 

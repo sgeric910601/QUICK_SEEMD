@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -10,6 +11,8 @@ import pytest
 from quickseemd.core.preview import highlight, languages
 
 BUDGET_SECONDS = 1.5
+# 覆蓋率量測會讓 Python 慢好幾倍；那時放寬時間上限，平常照原本的預算檢查
+TIME_SCALE = 8.0 if sys.gettrace() is not None else 1.0
 TARGET_BYTES = 2 * 1024 * 1024
 
 PY_CHUNK = '''
@@ -65,7 +68,7 @@ def test_two_mib_highlight_within_budget(lang: str, chunk: str) -> None:
     elapsed = time.perf_counter() - start
     assert lines > 10_000
     assert '<span class="k">' in html or '<span class="y">' in html
-    assert elapsed < BUDGET_SECONDS, f"{lang}: {elapsed:.2f}s"
+    assert elapsed < BUDGET_SECONDS * TIME_SCALE, f"{lang}: {elapsed:.2f}s"
 
 
 def test_two_mib_file_render_within_budget(tmp_path: Path) -> None:
@@ -77,7 +80,7 @@ def test_two_mib_file_render_within_budget(tmp_path: Path) -> None:
     doc = engine.render(f)
     elapsed = time.perf_counter() - start
     assert doc.kind_label == "Python"
-    assert elapsed < BUDGET_SECONDS, f"render: {elapsed:.2f}s"
+    assert elapsed < BUDGET_SECONDS * TIME_SCALE, f"render: {elapsed:.2f}s"
 
 
 # ------------------------------------------------------------------ 惡意輸入（不可變成平方時間）
@@ -118,7 +121,7 @@ def test_hostile_two_mib_within_budget(lang: str, unit: str) -> None:
     start = time.perf_counter()
     highlight.code_view(text, languages.BY_ID[lang])
     elapsed = time.perf_counter() - start
-    assert elapsed < BUDGET_SECONDS, f"{lang} {unit!r}: {elapsed:.2f}s"
+    assert elapsed < BUDGET_SECONDS * TIME_SCALE, f"{lang} {unit!r}: {elapsed:.2f}s"
 
 
 @pytest.mark.slow
@@ -133,5 +136,5 @@ def test_unclosed_char_literals_are_linear(lang: str) -> None:
     text = "\\'" * (63 * 512)
     start = time.perf_counter()
     html, _ = highlight.code_view(text, languages.BY_ID[lang])
-    assert time.perf_counter() - start < 0.3
+    assert time.perf_counter() - start < 0.3 * TIME_SCALE
     assert '<span class="s">' not in html
