@@ -44,6 +44,8 @@ LEVELS: dict[str, Level] = {
 }
 CODEC_TITLES = {"h264": "H.264", "hevc": "HEVC"}
 MIN_SAVING = 0.95  # 至少要小 5% 才交付
+# 目標大小快速填入按鈕的說明（原版按鈕的 help）
+TARGET_HELP = "常見上限：Email 約 25 MB、Discord 免費版 10 MB"
 
 
 @dataclass(frozen=True)
@@ -333,7 +335,7 @@ OPTIONS: tuple[Option, ...] = (
         label="MB",
         default="25",
         placeholder="25",
-        caption="常見上限：Email 約 25 MB、Discord 免費版 10 MB",
+        suggestions=tuple(Choice(mb, mb, TARGET_HELP) for mb in ("10", "25", "50")),
         group="目標大小",
         group_icon="scalemass",
         visible=_use_target,

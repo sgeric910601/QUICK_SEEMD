@@ -29,7 +29,7 @@ def test_gif_options_scale_start_and_no_loop(tmp_path, outdir):
         "video.to-gif",
         [src],
         outdir,
-        start="1",
+        start=1.0,
         length=1.0,
         fps=5,
         width=320,
@@ -52,14 +52,14 @@ def test_gif_original_width_high_quality(video_file, outdir):
 
 
 def test_gif_start_past_end_is_clamped(video_file, outdir):
-    outputs, ctx = run_tool("video.to-gif", [video_file], outdir, start="9")
+    outputs, ctx = run_tool("video.to-gif", [video_file], outdir, start=9.0)
     # 開始被限制在長度 − 0.1 秒：剩 0.1 秒 → 1 格
     assert count_frames(outputs[0]) == 1
     assert ctx.last_message.startswith("GIF 動畫：1 格、10 fps、長 0.1 秒")
 
 
 def test_gif_validation_and_note(video_file):
-    assert validate("video.to-gif", [video_file], start="1.95") == "開始時間超過影片長度"
+    assert validate("video.to-gif", [video_file], start=1.95) == "開始時間超過影片長度"
     assert validate("video.to-gif", [video_file], length=0.1) == "長度至少 0.2 秒"
     assert validate("video.to-gif", [video_file], start="?") == "時間格式不正確，例如 1:05.5 或 65"
     assert validate("video.to-gif", [video_file]) is None
@@ -151,3 +151,29 @@ def test_frames_notes(video_file, tmp_path):
     other = make_video(tmp_path / "b.mp4", seconds=1)
     many = note_texts("video.frames", [video_file, other])
     assert "每個影片擷取多張時，會存成一個「影片名稱-畫面」資料夾。" in many
+
+
+def test_gif_slider_ranges_follow_duration(video_file):
+    from test_media_support import tool
+
+    t = tool("video.to-gif")
+    start, length = t.option("start"), t.option("length")
+    assert (start.kind.value, start.step, start.default) == ("slider", 0.1, 0.0)
+    info = t.inspect([video_file])
+    assert start.current_range(t.defaults(), info) == (0.0, pytest.approx(1.8))
+    assert length.current_range(t.defaults(), info) == (0.5, pytest.approx(2.0))
+    later = {**t.defaults(), "start": 1.5}
+    # 剩 0.5 秒，但上限至少 1 秒（原版 max(1, …)）
+    assert length.current_range(later, info) == (0.5, 1.0)
+    # 還沒讀到資訊或多個檔案：原版的預設 60 秒／30 秒
+    assert start.current_range(t.defaults(), {}) == (0.0, pytest.approx(59.8))
+    assert length.current_range(t.defaults(), {}) == (0.5, 30.0)
+    assert start.display(65.25) == "1:05.3"
+    assert length.display(2.5) == "2.5 秒"
+
+
+def test_gif_start_accepts_number_and_time_text(video_file, outdir):
+    outputs, ctx = run_tool("video.to-gif", [video_file], outdir, start=1.0, length=0.5)
+    assert count_frames(outputs[0]) == 5
+    outputs, _ = run_tool("video.to-gif", [video_file], outdir, start="0:01", length=0.5)
+    assert count_frames(outputs[0]) == 5

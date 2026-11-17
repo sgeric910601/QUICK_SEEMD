@@ -128,6 +128,9 @@ class ToolDefinition:
     custom_page: str | None = None  # "converter"：整頁換成萬用轉換
     custom_view: str | None = None  # "pdf-organize" "image-crop" "media-trim" "audio-trim"
     requires: tuple[str, ...] = ()  # 需要的外部工具（backends 的鍵）
+    # 使用者改了某個選項後的連動（例如換形狀就重設留白、鎖定比例時同步寬高）：
+    # adjust(目前的值, 剛改的鍵, info) → 要一併改的值；介面層合併後重畫
+    adjust: Callable[[Values, str, Info], Values] | None = None
 
     # ------------------------------------------------------------ 查詢
 

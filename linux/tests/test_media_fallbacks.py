@@ -124,3 +124,16 @@ def test_bad_option_values_are_rejected(video_file, outdir):
         run_tool("video.resize", [video_file], outdir, resolution=True)
     with pytest.raises(errors.QSError, match="請輸入目標大小（MB）"):
         run_tool("video.compress", [video_file], outdir, use_target=True, target_mb="")
+
+
+def test_compress_target_suggestions():
+    from quickseemd.core.tools.media.compress import target_mb
+
+    opt = tool("video.compress").option("target_mb")
+    assert [c.value for c in opt.suggestions] == ["10", "25", "50"]
+    assert [c.title for c in opt.suggestions] == ["10", "25", "50"]
+    assert all(
+        c.subtitle == "常見上限：Email 約 25 MB、Discord 免費版 10 MB" for c in opt.suggestions
+    )
+    for c in opt.suggestions:
+        assert target_mb({"target_mb": c.value}) == float(c.value)
