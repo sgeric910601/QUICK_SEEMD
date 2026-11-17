@@ -6,6 +6,8 @@
 - 會碰真系統的指令（nemo、systemctl、gdbus…）在搜尋路徑最前面放「擋下」的替身
 - 只准對測試自己啟動的子程序送訊號
 - DISPLAY 只能是未設定，或 QS_TEST_DISPLAY 指定的 :120 以上隔離畫面
+- 記憶體上限：整個測試程序（含所有子程序）的資料區上限預設 6 GB（QS_TEST_MEM_LIMIT_GB），
+  壓力測試失控時只會這個程序自己失敗，不會吃光整台電腦的記憶體
 """
 
 from __future__ import annotations
@@ -107,7 +109,23 @@ def _isolate() -> None:
     sys.path.insert(0, str(LINUX_DIR))
 
 
+DEFAULT_MEM_LIMIT_GB = 6.0
+
+
+def _cap_memory() -> int:
+    """限制資料區（heap 與私有可寫映射）大小；子程序會繼承，降低後就無法再調高。"""
+    import resource  # noqa: PLC0415
+
+    limit = int(float(os.environ.get("QS_TEST_MEM_LIMIT_GB", DEFAULT_MEM_LIMIT_GB)) * 1024**3)
+    _soft, hard = resource.getrlimit(resource.RLIMIT_DATA)
+    if hard != resource.RLIM_INFINITY:
+        limit = min(limit, hard)
+    resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
+    return limit
+
+
 _isolate()
+MEM_LIMIT_BYTES = _cap_memory()
 
 # ------------------------------------------------------------------ 訊號防護
 
