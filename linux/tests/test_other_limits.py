@@ -330,3 +330,47 @@ def test_crc_mismatch_is_corrupt_not_retried(indir, tmp_path):
         unpack.extract(z, ArchiveKind.ZIP, work, ToolContext(work))
     assert str(exc.value) == "「crc.zip」無法解壓縮：檔案可能已損毀，或不是支援的壓縮格式。"
     assert list(work.iterdir()) == []
+
+
+def test_hard_links_are_charged_when_linking_fails(indir, tmp_path, monkeypatch):
+    """檔案系統不支援硬連結時 tarfile 會改成複製；每個連結都要算進額度。"""
+    archive = indir / "links.tar"
+    data = os.urandom(MiB)
+    with tarfile.open(archive, "w") as tf:
+        info = tarfile.TarInfo("one.bin")
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+        for i in range(300):
+            link = tarfile.TarInfo(f"copy{i}.bin")
+            link.type = tarfile.LNKTYPE
+            link.linkname = "one.bin"
+            tf.addfile(link)
+
+    def no_links(*_args, **_kw):
+        raise OSError(1, "不支援硬連結")
+
+    monkeypatch.setattr(os, "link", no_links)
+    work = tmp_path / "work"
+    work.mkdir()
+    limits = ExtractLimits(max_total_bytes=50 * MiB)
+    assert _extract_with(archive, ArchiveKind.TAR, work, limits) == (
+        "「links.tar」解開後超過 50 MB，為了避免塞滿磁碟，已停止解壓縮。"
+    )
+
+
+def test_symlink_targets_are_charged(indir, tmp_path):
+    archive = indir / "symlinks.tar"
+    data = os.urandom(MiB)
+    with tarfile.open(archive, "w") as tf:
+        info = tarfile.TarInfo("d/one.bin")
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+        for i in range(60):
+            link = tarfile.TarInfo(f"d/l{i}")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "one.bin"
+            tf.addfile(link)
+    work = tmp_path / "work"
+    work.mkdir()
+    limits = ExtractLimits(max_total_bytes=50 * MiB)
+    assert "解開後超過 50 MB" in _extract_with(archive, ArchiveKind.TAR, work, limits)

@@ -119,6 +119,9 @@ def _extract_mapped(
         if kind in SINGLE_FILE_KINDS:
             return _single_file(archive, kind, holder, ctx, budget)
         staging = _extract_tree(archive, kind, holder, ctx, budget)
+        result = _result(archive, staging)
+        # 以實際交付的項目為根檢查連結：單一項目交付到使用者資料夾後，「..」就是那個資料夾
+        verify_tree(result.path)
     except UnsafeEntry as exc:
         raise unsafe_error(archive, exc.entry) from exc
     except Encrypted as exc:
@@ -129,7 +132,7 @@ def _extract_mapped(
         raise conflict_error(archive, exc.entry) from exc
     except TooLarge as exc:
         raise exc.error(archive) from exc
-    return _result(archive, staging)
+    return result
 
 
 def _new_staging(holder: Path) -> Path:
@@ -157,7 +160,6 @@ def _extract_tree(
         unpack_external.extract(
             archive, staging, holder, ctx, budget, converted, allow_7z=kind is not ArchiveKind.TAR
         )
-    verify_tree(staging)
     return staging
 
 
@@ -422,9 +424,34 @@ def _keep_tar_member(m: tarfile.TarInfo) -> bool:
     return True
 
 
-def _scan_tar(tf: tarfile.TarFile, budget: Budget) -> list[tarfile.TarInfo]:
+def _link_key(member: tarfile.TarInfo) -> str:
+    """連結指向的項目名稱（硬連結相對於壓縮檔根目錄，符號連結相對於自己所在的資料夾）。"""
+    if member.islnk():
+        return "/".join(safe_parts(member.linkname))
+    depth = list(safe_parts(member.name)[:-1])
+    for comp in member.linkname.split("/"):
+        if comp == "..":
+            if depth:
+                depth.pop()
+        elif comp not in ("", "."):
+            depth.append(comp)
+    return "/".join(depth)
+
+
+def _member_cost(member: tarfile.TarInfo, sizes: dict[str, int]) -> int:
+    """會寫進磁碟的大小。連結也算目標的大小：檔案系統不支援連結（exFAT、FUSE…）時
+    tarfile 會改成複製一份。"""
+    if member.isreg():
+        return member.size
+    if member.islnk() or member.issym():
+        return sizes.get(_link_key(member), 0)
+    return 0
+
+
+def _scan_tar(tf: tarfile.TarFile, budget: Budget) -> list[tuple[tarfile.TarInfo, int]]:
     """逐一讀項目標頭並檢查；宣告大小一超過額度就立刻停（不必先解完整個壓縮串流）。"""
-    plan: list[tarfile.TarInfo] = []
+    plan: list[tuple[tarfile.TarInfo, int]] = []
+    sizes: dict[str, int] = {}
     declared = 0
     while True:
         try:
@@ -433,12 +460,15 @@ def _scan_tar(tf: tarfile.TarFile, budget: Budget) -> list[tarfile.TarInfo]:
             raise NeedExternal from exc
         if member is None:
             break
-        if not _keep_tar_member(member):
+        keep = _keep_tar_member(member)
+        cost = _member_cost(member, sizes)
+        # 略過的 macOS 中繼資料也記下大小：連結指向它而連結失敗時，tarfile 會複製它的內容
+        sizes["/".join(safe_parts(member.name))] = cost
+        if not keep:
             continue
-        if member.isreg():
-            declared += member.size
-            budget.check(extra_disk=declared, extra_content=declared)
-        plan.append(member)
+        declared += cost
+        budget.check(extra_disk=declared, extra_content=declared)
+        plan.append((member, cost))
     budget.plan(declared)
     return plan
 
@@ -462,10 +492,10 @@ def extract_tar(path: Path, root: Path, ctx: ToolContext, budget: Budget) -> Non
         raise NeedExternal from exc
     with tf:
         plan = _scan_tar(tf, budget)
-        for i, member in enumerate(plan):
+        for i, (member, cost) in enumerate(plan):
             ctx.check_cancelled()
             _extract_member(tf, member, root)
-            budget.charge(member.size if member.isreg() else 0)
+            budget.charge(cost)
             ctx.progress((i + 1) / len(plan))
 
 

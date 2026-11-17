@@ -771,3 +771,74 @@ def test_single_hidden_entry_in_tar_is_wrapped(indir, outdir):
     [out] = _run([archive], outdir)
     assert out == outdir / "dots"
     assert (out / ".xsessionrc").is_file()
+
+
+# ------------------------------------------------------------------ 交付後仍安全的符號連結
+
+
+def _zip_links(path: Path, links: dict[str, str], files: dict[str, str] | None = None) -> Path:
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in (files or {}).items():
+            zf.writestr(name, data)
+        for name, target in links.items():
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zf.writestr(info, target)
+    return path
+
+
+def test_links_escaping_the_single_delivered_folder_are_refused(indir, outdir, tmp_path):
+    """d 單獨交付到使用者資料夾後，d/up → .. 與 d/key → ../.ssh/id_rsa 會指到外面。"""
+    z = _zip_links(
+        indir / "bad.zip", {"d/up": "..", "d/key": "../.ssh/id_rsa"}, {"d/": "", "d/a.txt": "a"}
+    )
+    assert UNSAFE_PREFIX in _run_refused(z, outdir, tmp_path)
+
+
+def test_single_top_level_symlink_is_refused(indir, outdir, tmp_path):
+    z = _zip_links(indir / "bad.zip", {"invoice.pdf": ".ssh/id_rsa"})
+    assert UNSAFE_PREFIX in _run_refused(z, outdir, tmp_path)
+
+
+def test_dangling_symlink_is_refused(indir, outdir, tmp_path):
+    z = _zip_links(indir / "bad.zip", {"d/l": "missing.txt"}, {"d/a.txt": "a"})
+    assert UNSAFE_PREFIX in _run_refused(z, outdir, tmp_path)
+
+
+def test_link_through_parent_name_is_refused(indir, outdir, tmp_path):
+    """d/a → ../d/file 在暫存資料夾裡看似在 d 裡面，交付時改名成「d (1)」就會指到別的 d。"""
+    z = _zip_links(indir / "bad.zip", {"d/a": "../d/file"}, {"d/file": "f"})
+    assert UNSAFE_PREFIX in _run_refused(z, outdir, tmp_path)
+
+
+def test_link_through_symlinked_folder_is_refused(indir, outdir, tmp_path):
+    """經過另一個連結再「..」：l1 → .、l2 → l1/../x；改名或搬移後解析結果會變。"""
+    z = _zip_links(indir / "bad.zip", {"d/l1": ".", "d/l2": "l1/../x"}, {"d/x": "x"})
+    assert UNSAFE_PREFIX in _run_refused(z, outdir, tmp_path)
+
+
+def test_tar_link_escaping_single_folder_is_refused(indir, outdir, tmp_path):
+    members = [
+        _member("d", tarfile.DIRTYPE),
+        _member("d/a.txt"),
+        _member("d/key", tarfile.SYMTYPE, "../.ssh/id_rsa"),
+    ]
+    archive = _tar(indir / "bad.tar", members)
+    assert UNSAFE_PREFIX in _run_refused(archive, outdir, tmp_path)
+
+
+def test_library_symlink_chain_is_allowed(indir, outdir):
+    """常見的函式庫連結鏈（libx.so → libx.so.1 → libx.so.1.2）仍可正常解開。"""
+    z = _zip_links(
+        indir / "lib.zip",
+        {
+            "pkg/lib/libx.so": "libx.so.1",
+            "pkg/lib/libx.so.1": "libx.so.1.2",
+            "pkg/bin/x": "../lib/libx.so",
+        },
+        {"pkg/lib/libx.so.1.2": "ELF"},
+    )
+    [out] = _run([z], outdir)
+    assert out == outdir / "pkg"
+    assert (out / "bin" / "x").read_text() == "ELF"

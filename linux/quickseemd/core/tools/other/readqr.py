@@ -35,6 +35,8 @@ PDF_SCALE = 2  # 原版以 2 倍大小繪製
 MAX_RENDER_PX = 4000  # 繪製後的長邊上限（約 64 MB 的 RGBA 畫面）
 MAX_PAGE_POINTS = 14400.0  # PDF 規格的頁面尺寸上限
 MIN_PAGE_POINTS = 1.0
+PDFINFO_TIMEOUT = 30  # 秒：讀頁面資訊；超過就當成讀不了
+RENDER_TIMEOUT = 60  # 秒：畫一頁；超過就略過這一頁
 SMALL_IMAGE = 400  # 長邊小於這個像素時放大再掃一次
 ZBAR_CFG_BINARY = 4  # zbar 0.23 起的 ZBAR_CFG_BINARY：不把資料轉成文字
 _HEIF_EXTS = frozenset({"heic", "heif", "avif"})
@@ -205,7 +207,13 @@ def _pdf_boxes(path: Path, ctx: ToolContext) -> dict[int, dict[str, Box]]:
     """前 20 頁的 MediaBox／CropBox（pdfinfo -box）。"""
     tool = backends.require("pdfinfo")
     args = [tool, "-f", "1", "-l", str(PDF_PAGE_LIMIT), "-box", os.path.abspath(path)]
-    res = process.run(args, cancel=ctx.cancel_event)
+    try:
+        res = process.run(args, cancel=ctx.cancel_event, timeout=PDFINFO_TIMEOUT)
+    except errors.Cancelled:
+        raise
+    except errors.QSError as exc:  # 逾時
+        log.info("pdfinfo 逾時：%s", exc)
+        raise errors.unreadable(path.name) from exc
     if res.returncode != 0:
         log.info("pdfinfo 失敗：%s", process.last_lines(res.stderr))
         raise errors.unreadable(path.name)
@@ -227,7 +235,13 @@ def _render_page(
     out = work / f"page-{page}"
     args = [tool, "-png", "-singlefile", "-scale-to", str(long_side)]
     args += ["-f", str(page), "-l", str(page), os.path.abspath(path), str(out)]
-    res = process.run(args, cancel=ctx.cancel_event)
+    try:
+        res = process.run(args, cancel=ctx.cancel_event, timeout=RENDER_TIMEOUT)
+    except errors.Cancelled:
+        raise
+    except errors.QSError as exc:  # 逾時：略過這一頁
+        log.info("第 %d 頁畫太久，略過：%s", page, exc)
+        return None
     png = work / f"page-{page}.png"
     if res.returncode != 0 or not png.exists():
         log.info("第 %d 頁畫不出來：%s", page, process.last_lines(res.stderr))
