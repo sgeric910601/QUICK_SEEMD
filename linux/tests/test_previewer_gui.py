@@ -36,7 +36,10 @@ def _make_files(root: Path) -> dict[str, str]:
     document.add_heading("預覽測試文件", 0)
     document.add_paragraph("這份文件用 LibreOffice 轉成 PDF 後顯示。")
     document.save(files / "報告.docx")
+    gif = files / "動畫.gif"
+    _make_gif(gif)
     return {
+        "gif": str(gif),
         "text": str(text),
         "big": str(big),
         "image": str(conftest.make_image(files / "相片.jpg", size=(1600, 1000), quality=90)),
@@ -47,6 +50,13 @@ def _make_files(root: Path) -> dict[str, str]:
         "fifo": str(fifo),
         "office": str(files / "報告.docx"),
     }
+
+
+def _make_gif(path: Path) -> None:
+    from PIL import Image  # noqa: PLC0415
+
+    frames = [Image.new("RGB", (320, 200), c) for c in ("red", "green", "blue", "orange")]
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=80, loop=0)
 
 
 def _fake_default_app(s: Session, marker: Path) -> None:
@@ -105,6 +115,17 @@ def test_image_preview_reuses_window_and_fits(report):
     assert r["id"] == b["text"]["id"]  # 換內容，不是開新視窗
     # 1600×1000 的圖要縮到螢幕 85% 以內（整個視窗，含標題列與邊框）
     assert r["width"] <= 1088 + 12 and r["height"] <= 680 + 12
+
+
+def test_animated_gif_preview(report):
+    r = report["basics"]["gif"]
+    _assert_page(r, min_colors=2)
+    assert r["width"] >= 320
+
+
+def test_media_controls_do_not_break_the_window(report):
+    r = report["media"]
+    assert r["shown"] and r["still_open"]
 
 
 def test_pdf_preview(report):

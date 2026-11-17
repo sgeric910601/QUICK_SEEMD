@@ -292,6 +292,7 @@ def scenario_basics(d: Desktop, p: Preview, f: dict) -> dict:
     r: dict = {}
     r["text"] = show_and_capture(d, p, uri_of(f["text"]), Path(f["text"]).name, "text", settle=2.5)
     r["image"] = show_and_capture(d, p, uri_of(f["image"]), Path(f["image"]).name, "image")
+    r["gif"] = show_and_capture(d, p, uri_of(f["gif"]), Path(f["gif"]).name, "gif", settle=1)
     r["pdf"] = show_and_capture(d, p, uri_of(f["pdf"]), Path(f["pdf"]).name, "pdf", settle=2)
     r["video"] = show_and_capture(
         d, p, uri_of(f["video"]), Path(f["video"]).name, "video", settle=3
@@ -328,6 +329,29 @@ def scenario_keys(d: Desktop, p: Preview, f: dict) -> dict:
     p.close()
     d.gone(lambda t: t == Path(f["image"]).name)
     return r
+
+
+def scenario_media_controls(d: Desktop, p: Preview, f: dict) -> dict:
+    """播放控制：播完後按播放（從頭開始）、暫停、在進度條上點一下（跳到那裡）。"""
+    title = Path(f["audio"]).name
+    p.show(uri_of(f["audio"]))
+    win = d.find(lambda t: t == title, timeout=15)
+    if win is None:
+        return {"shown": False}
+    d.pump(6.0)  # 4 秒的聲音：等它播完
+    info = d.info(win)
+    bottom = info["y"] + info["height"] - 26
+    d.click(info["x"] + 27, bottom)  # 播放（從頭開始）
+    d.pump(1.0)
+    d.click(info["x"] + 27, bottom)  # 暫停
+    d.pump(0.5)
+    d.click(info["x"] + info["width"] // 2, bottom)  # 點進度條中間
+    d.pump(1.0)
+    shot = d.screenshot("media-controls")
+    still = d.find(lambda t: t == title, timeout=2) is not None
+    p.close()
+    d.gone(lambda t: t == title)
+    return {"shown": True, "still_open": still, "shot": shot}
 
 
 def scenario_rapid(d: Desktop, p: Preview, f: dict) -> dict:
@@ -381,6 +405,7 @@ def run_preview(cfg: dict, d: Desktop) -> dict:
     report = {"basics": scenario_basics(d, p, f)}
     report["keys"] = scenario_keys(d, p, f)
     report["rapid"] = scenario_rapid(d, p, f)
+    report["media"] = scenario_media_controls(d, p, f)
     report["transient"] = scenario_transient(d, p, f)
     report["open_button"] = scenario_open_button(d, p, f, Path(cfg["marker"]))
     report["service_stopped"] = p.stop_service(PREVIEW[0], cfg["bus_config"])

@@ -329,3 +329,54 @@ def test_lib_dir_is_under_user_data(ext):
 
 def test_provider_is_gobject(ext):
     assert issubclass(ext.QuickSeemdMenuProvider, GObject.GObject)
+
+
+# ------------------------------------------------------------------ 真正的輔助函式（測試環境沒有 D-Bus）
+
+
+def _run_loop(until, timeout_ms: int = 3000) -> None:
+    loop = GLib.MainLoop()
+    GLib.timeout_add(timeout_ms, loop.quit)
+
+    def check() -> bool:
+        if until():
+            loop.quit()
+            return False
+        return True
+
+    GLib.timeout_add(20, check)
+    loop.run()
+
+
+def test_real_get_bus_reports_missing_bus(ext):
+    got: list = []
+    ext._get_bus(lambda conn, err: got.append((conn, err)))
+    _run_loop(lambda: bool(got))
+    assert got and got[0][0] is None and got[0][1] is not None
+
+
+def test_real_spawn(ext, tmp_path):
+    marker = tmp_path / "ran"
+    assert ext._spawn(["/usr/bin/touch", str(marker)]) is True
+    _run_loop(marker.exists)
+    assert marker.exists()
+
+
+def test_real_spawn_missing_program(ext):
+    assert ext._spawn(["/nonexistent/quickseemd-agent"]) is False
+
+
+def test_real_name_waiter_gives_up(ext):
+    appeared: list = []
+    ext._wait_for_name("dev.quickseemd.Agent", lambda: appeared.append(1), 100)
+    _run_loop(lambda: False, timeout_ms=400)
+    assert appeared == []
+
+
+def test_name_waiter_appeared_once(ext):
+    calls: list = []
+    waiter = ext._NameWaiter("dev.quickseemd.Agent", lambda: calls.append(1), 5000)
+    waiter._on_appeared(None, "dev.quickseemd.Agent", ":1.2")
+    waiter._on_appeared(None, "dev.quickseemd.Agent", ":1.2")
+    _run_loop(lambda: False, timeout_ms=100)
+    assert calls == [1]
