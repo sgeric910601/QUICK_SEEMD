@@ -19,6 +19,8 @@ from .probe import MediaInfo, probe, too_short
 from .timefmt import format_time, parse_time
 
 MAX_FRAMES = 1800
+MAX_LENGTH = 30.0  # 長度滑桿的上限（秒）
+DEFAULT_DURATION = 60.0  # 還不知道影片長度時，開始滑桿當成 60 秒
 
 
 @dataclass(frozen=True)
@@ -115,9 +117,19 @@ def gif_file(file: Path, o: GifOptions, ctx: ToolContext) -> list[Path]:
         return [engine.deliver(ctx, out, ctx.output_name(file, None, "gif"), file, summary)]
 
 
+def start_value(values: Values) -> float | None:
+    """開始時間：滑桿給的秒數；也接受「1:05.5」這類文字（命令列用）。格式不對回傳 None。"""
+    raw = values.get("start", 0.0)
+    if isinstance(raw, str):
+        text = raw.strip()
+        return parse_time(text) if text else 0.0
+    if isinstance(raw, bool) or not isinstance(raw, int | float) or raw != raw:
+        return None
+    return max(0.0, float(raw))
+
+
 def gif_options(values: Values) -> GifOptions:
-    start_text = common.text(values, "start").strip()
-    start = parse_time(start_text) if start_text else 0.0
+    start = start_value(values)
     if start is None:
         raise errors.QSError("時間格式不正確，例如 1:05.5 或 65")
     return GifOptions(
@@ -138,9 +150,29 @@ def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
 # ---------------------------------------------------------------- 選項畫面
 
 
+def _known_duration(info: Info) -> float | None:
+    """只有一個檔案而且讀得到長度時才回傳（原版 single?.duration）。"""
+    single = common.single_info(info)
+    return single.duration if single is not None else None
+
+
+def start_range(values: Values, info: Info) -> tuple[float, float]:
+    """開始：0 … 長度 − 0.2（不知道長度時當 60 秒）。"""
+    duration = _known_duration(info)
+    return 0.0, max(0.1, (duration if duration is not None else DEFAULT_DURATION) - 0.2)
+
+
+def length_range(values: Values, info: Info) -> tuple[float, float]:
+    """長度：0.5 … min(30, 剩下的長度)，至少到 1 秒（不知道長度時當 30 秒）。"""
+    duration = _known_duration(info)
+    max_start = start_range(values, info)[1]
+    start = start_value(values) or 0.0
+    remaining = (duration if duration is not None else MAX_LENGTH) - min(start, max_start)
+    return 0.5, max(1.0, min(MAX_LENGTH, remaining))
+
+
 def validate(files: list[Path], values: Values, info: Info) -> str | None:
-    start_text = common.text(values, "start").strip()
-    start = parse_time(start_text) if start_text else 0.0
+    start = start_value(values)
     if start is None:
         return "時間格式不正確，例如 1:05.5 或 65"
     single = common.single_info(info) if len(files) == 1 else None
@@ -172,13 +204,16 @@ OPTIONS: tuple[Option, ...] = (
     common.source_note(),
     Option(
         key="start",
-        kind=Kind.TIME,
+        kind=Kind.SLIDER,
         label="開始",
-        default="0:00",
-        placeholder="0:00.0",
-        caption="格式例如 1:05.5 或 65",
+        default=0.0,
+        minimum=0.0,
+        maximum=DEFAULT_DURATION - 0.2,
+        step=0.1,
+        display=lambda v: format_time(float(v)),
         group="片段",
         group_icon="timeline.selection",
+        dynamic_range=start_range,
     ),
     Option(
         key="length",
@@ -186,11 +221,12 @@ OPTIONS: tuple[Option, ...] = (
         label="長度",
         default=5.0,
         minimum=0.5,
-        maximum=30.0,
+        maximum=MAX_LENGTH,
         step=0.5,
         display=lambda v: "%.1f 秒" % float(v),
         group="片段",
         group_icon="timeline.selection",
+        dynamic_range=length_range,
     ),
     Option(
         key="fps",
