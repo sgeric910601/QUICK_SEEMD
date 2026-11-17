@@ -14,9 +14,8 @@ TOOLTIP = "QUICK_SEEMD"
 class MenuEntry:
     kind: str  # item、check、separator、header（不能點的分組標題）、submenu
     label: str = ""
-    action: str = (
-        ""  # open-main、pick-files、tool:<代碼>、toggle-wheel、toggle-autostart、settings、quit
-    )
+    # open-main、pick-files、tool:<代碼>、toggle-wheel、toggle-autostart、settings、quit
+    action: str = ""
     active: bool = False
     children: tuple[MenuEntry, ...] = ()
 

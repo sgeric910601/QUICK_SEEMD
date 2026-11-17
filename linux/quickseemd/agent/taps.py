@@ -22,7 +22,7 @@ _EPSILON = 1e-6  # 浮點誤差：剛好 300 ms 也算
 # X 的修飾鍵遮罩位元（Xlib.X.ShiftMask 等；GNOME 下 Alt＝Mod1、Super＝Mod4）
 MASK_BITS: dict[str, int] = {"shift": 1 << 0, "control": 1 << 2, "alt": 1 << 3, "super": 1 << 6}
 
-_KEYSYM_NAMES: dict[str, str] = {
+KEYSYM_NAMES: dict[str, str] = {
     "Shift_L": "shift",
     "Shift_R": "shift",
     "Control_L": "control",
@@ -53,7 +53,7 @@ def mask_to_keys(mask: int) -> frozenset[str]:
 
 def key_for_keysym_name(name: str) -> str | None:
     """X 的 keysym 名稱（Shift_L、Escape…）→ 我們的鍵名稱；不相關的鍵回傳 None。"""
-    return _KEYSYM_NAMES.get(name)
+    return KEYSYM_NAMES.get(name)
 
 
 def wheel_keys(values: Mapping[str, object]) -> dict[str, str]:
