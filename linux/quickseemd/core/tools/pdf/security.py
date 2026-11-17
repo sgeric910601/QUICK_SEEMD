@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import logging
 import re
 import secrets
@@ -202,37 +203,42 @@ PROTECT = ToolDefinition(
 # ================================================================ 解鎖
 
 
-def _probe(file: Path) -> pikepdf.Pdf | None:
-    """不用密碼開啟；需要開啟密碼時回傳 None。"""
+def _open(file: Path, password: str = "") -> pikepdf.Pdf:
+    return pikepdf.open(file, password=password)
+
+
+def _probe(file: Path, stack: contextlib.ExitStack) -> pikepdf.Pdf | None:
+    """不用密碼開啟（交給 stack 管理關閉）；需要開啟密碼時回傳 None。"""
     if not file.is_file():
         raise errors.file_not_found(file.name)
     try:
-        return pikepdf.open(file)
+        return stack.enter_context(_open(file))
     except pikepdf.PasswordError:
         return None
     except (pikepdf.PdfError, OSError, ValueError) as exc:
         raise errors.unreadable(f"「{file.name}」不是有效的 PDF，或檔案已損毀。") from exc
 
 
-def _open_unlocked(file: Path, password: str, probe: pikepdf.Pdf | None) -> pikepdf.Pdf:
+def _open_unlocked(
+    file: Path, password: str, probe: pikepdf.Pdf | None, stack: contextlib.ExitStack
+) -> pikepdf.Pdf:
+    """用密碼開啟（交給 stack 管理）；密碼不對但檔案只有權限限制時沿用 probe。"""
     try:
-        pdf = pikepdf.open(file, password=password)
+        return stack.enter_context(_open(file, password))
     except pikepdf.PasswordError as exc:
         if probe is None:
             raise errors.QSError(f"「{file.name}」的密碼不正確。") from exc
         return probe  # 只有權限限制、密碼不是擁有者密碼：沿用不用密碼開啟的版本
-    if probe is not None:
-        probe.close()
-    return pdf
 
 
 def _unlock_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
-    probe = _probe(file)
-    if probe is not None and not probe.is_encrypted:
-        probe.close()
-        raise errors.QSError(f"「{file.name}」沒有加密，不需要解鎖。")
-    ctx.progress(0.1, f"解鎖「{file.name}」…")
-    with _open_unlocked(file, str(values.get("password") or ""), probe) as pdf:
+    # 開啟的每一份都由 ExitStack 負責關閉（任何錯誤或提早結束都一樣）
+    with contextlib.ExitStack() as stack:
+        probe = _probe(file, stack)
+        if probe is not None and not probe.is_encrypted:
+            raise errors.QSError(f"「{file.name}」沒有加密，不需要解鎖。")
+        ctx.progress(0.1, f"解鎖「{file.name}」…")
+        pdf = _open_unlocked(file, str(values.get("password") or ""), probe, stack)
         if not full_access(pdf):
             raise errors.QSError(
                 f"「{file.name}」設有權限限制，請輸入「權限（擁有者）密碼」才能完整解鎖。"

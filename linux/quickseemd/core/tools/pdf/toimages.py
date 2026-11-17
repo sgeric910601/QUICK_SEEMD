@@ -15,6 +15,9 @@ from ...model import TINTS, PDF, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Info, Kind, Option, Values, note
 from . import render
 from .common import (
+    TIMEOUT_IMAGE_CODEC,
+    check_pixels,
+    open_image,
     work_dir,
     INPUT_LABEL,
     PDF_TYPES,
@@ -64,9 +67,11 @@ def _render_one(
         ctx.run_process(
             [backends.require("heif-enc"), "-q", str(quality), "-o", str(out), str(png)],
             "heif-enc",
+            timeout=TIMEOUT_IMAGE_CODEC,
         )
         return out
-    with Image.open(png) as im:
+    with open_image(png) as im:
+        check_pixels(im, png.name)
         rgb = im.convert("RGB")
     options: dict = {"dpi": (want, want)}
     if fmt == "jpg":

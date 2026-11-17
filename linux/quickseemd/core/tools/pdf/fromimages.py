@@ -18,13 +18,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pikepdf
-from PIL import Image, ImageOps, ImageSequence, UnidentifiedImageError
+from PIL import Image, ImageOps, ImageSequence
 from pikepdf import Name
 
 from ... import backends, errors, naming
 from ...model import TINTS, PDF, ToolContext, ToolDefinition
 from ...options import Choice, Info, Kind, Option, Values, note
-from .common import A4, LETTER, as_float, work_dir
+from .common import (
+    A4,
+    LETTER,
+    TIMEOUT_IMAGE_CODEC,
+    as_float,
+    check_pixels,
+    open_image,
+    work_dir,
+)
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +40,7 @@ PAPERS: dict[str, tuple[float, float] | None] = {"a4": A4, "letter": LETTER, "fi
 HEIF_EXTS = frozenset({"heic", "heif", "hif", "avif"})
 LOSSY_FORMATS = frozenset({"HEIF", "AVIF", "WEBP"})
 JPEG_REENCODE_QUALITY = 90
+MAX_FRAMES = 5000  # 多頁 TIFF 最多放幾頁
 
 # EXIF 方向：存檔座標 (s, t)（左上為原點、0–1）→ 顯示座標 (u, v)
 _ORIENT = {
@@ -178,7 +187,9 @@ def _frame_picture(frame: Image.Image, fmt: str, dpi: float) -> Picture:
 def _decode_heif(ctx: ToolContext, path: Path, work: Path) -> Path:
     out = work / f"heif-{secrets.token_hex(6)}.png"
     ctx.run_process(
-        [backends.require("heif-convert"), "--quiet", str(path.resolve()), str(out)], "heif-convert"
+        [backends.require("heif-convert"), "--quiet", str(path.resolve()), str(out)],
+        "heif-convert",
+        timeout=TIMEOUT_IMAGE_CODEC,
     )
     if out.is_file():
         return out
@@ -189,25 +200,29 @@ def _decode_heif(ctx: ToolContext, path: Path, work: Path) -> Path:
 
 
 def pictures(ctx: ToolContext, path: Path, work: Path) -> Iterator[Picture]:
-    """一個圖檔裡要放進 PDF 的圖片（多頁 TIFF 有好幾張）。"""
+    """一個圖檔裡要放進 PDF 的圖片（多頁 TIFF 有好幾張）。
+
+    JPEG 只讀檔頭、原始資料直接放入；要解碼的圖片先檢查像素數（不可信的檔案）。
+    """
     source, fmt = path, None
     if naming.split_name(path.name)[1].lower() in HEIF_EXTS:
         source, fmt = _decode_heif(ctx, path, work), "HEIF"
-    try:
-        image = Image.open(source)
-    except Image.DecompressionBombError as exc:
-        raise errors.unreadable(f"無法解碼「{path.name}」。") from exc
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise errors.unreadable(f"「{path.name}」不是可辨識的圖片。") from exc
-    with image:
+    with open_image(source, path.name) as image:
         fmt = fmt or image.format or ""
         try:
             if fmt == "JPEG":
                 pic = _jpeg_picture(path, image)
-                yield pic if pic is not None else _lossless(image.convert("RGB"), _dpi(image))
+                if pic is None:
+                    check_pixels(image, path.name)
+                    pic = _lossless(image.convert("RGB"), _dpi(image))
+                yield pic
                 return
             frames = ImageSequence.Iterator(image) if fmt == "TIFF" else [image]
-            for frame in frames:
+            for count, frame in enumerate(frames):
+                if count >= MAX_FRAMES:
+                    log.warning("「%s」超過 %d 頁，其餘略過", path.name, MAX_FRAMES)
+                    break
+                check_pixels(frame, path.name)
                 frame.load()
                 yield _frame_picture(frame, fmt, _dpi(frame))
         except (OSError, ValueError, Image.DecompressionBombError) as exc:
