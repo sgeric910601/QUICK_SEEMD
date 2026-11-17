@@ -137,7 +137,7 @@ def test_inbox_fits_rules(fake_tools, files):
 
 def test_hub_sections_filter_by_query_and_inbox(fake_tools, files):
     tools = registry.all_tools()
-    secs = routing.hub_sections(None, tools, "全部", [])
+    secs = routing.hub_sections(None, tools, "allkinds", [])
     assert [t.id for _, lst in secs for t in lst] == ["test.all-kinds"]
     secs = routing.hub_sections(PDF, tools, "", [file_ref(files["c.png"])])
     assert secs == []
