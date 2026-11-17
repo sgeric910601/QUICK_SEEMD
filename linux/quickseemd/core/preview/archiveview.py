@@ -120,7 +120,7 @@ def _sorted(n: _Node) -> list[_Node]:
 
 
 class _Icons:
-    """每種副檔名一個附件 ai-N；超過 80 種後用 ai-fallback。"""
+    """每種副檔名一個附件 ico-N；超過 80 種後用 ico-fallback。"""
 
     def __init__(self) -> None:
         self.keys: dict[str, str] = {}
@@ -132,7 +132,7 @@ class _Icons:
         if found is not None:
             return found
         if len(self.keys) < MAX_ICONS:
-            name = f"ai-{len(self.keys)}"
+            name = f"ico-{len(self.keys)}"
             icon = (
                 icons.for_mime(icons.FOLDER_MIME, ICON_SIZE)
                 if n.is_dir
@@ -143,9 +143,9 @@ class _Icons:
             return name
         if "/fallback" not in self.keys:
             icon = icons.for_mime(None, ICON_SIZE)
-            self.attachments["ai-fallback"] = Attachment("ai-fallback", icon.data, icon.mime)
-            self.keys["/fallback"] = "ai-fallback"
-        return "ai-fallback"
+            self.attachments["ico-fallback"] = Attachment("ico-fallback", icon.data, icon.mime)
+            self.keys["/fallback"] = "ico-fallback"
+        return "ico-fallback"
 
 
 def _ext(name: str) -> str:

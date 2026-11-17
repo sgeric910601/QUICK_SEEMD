@@ -191,14 +191,14 @@ def test_zip_tree_markup(tmp_path: Path) -> None:
     assert body.index("file2.txt") < body.index("file10.txt")
     assert (
         '<details open><summary class="row"><span class="nm" style="padding-left:12px">'
-        '<span class="tw"></span><img src="cid:ai-' in body
+        '<span class="tw"></span><img src="cid:ico-' in body
     )
     assert '<span class="nm" style="padding-left:30px">' in body
     assert '<span class="num">2 KB</span><span class="num">1 KB</span>' in body
     assert '<span class="dt">2025/05/06 07:08</span>' in body
     assert "<b>.txt" not in body
     for name in (n for n in page.attachments):
-        assert name.startswith("ai-")
+        assert name.startswith("ico-")
 
 
 def test_archive_tree_open_state_and_icon_limit() -> None:
@@ -206,7 +206,7 @@ def test_archive_tree_open_state_and_icon_limit() -> None:
     page = archiveview.render(archive.Listing("TAR", entries), FileInfo.virtual("x.tar"))
     assert page.body.count("<details open>") == 450  # 超過 400 項只展開第一層
     assert len(page.attachments) <= 81
-    assert "ai-fallback" in page.attachments
+    assert "ico-fallback" in page.attachments
     small = [archive.Entry("a/b/c/d/e.txt", False, 1, None, None)]
     page = archiveview.render(archive.Listing("TAR", small), FileInfo.virtual("x.tar"))
     assert page.body.count("<details open>") == 3 and page.body.count("<details>") == 1

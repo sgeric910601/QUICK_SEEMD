@@ -114,660 +114,645 @@ _SHELL_BUILTINS = (
 )
 
 
-def _c_family() -> tuple[Language, ...]:
-    return (
-        L(
-            "swift",
-            "Swift",
-            keywords=words(_SWIFT_KW),
-            literals=words("true false nil"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(TRIPLE_DQ, DQ),
-            capitalized_types=True,
-            decorators=True,
-            preprocessor=True,
-        ),
-        L(
-            "c",
-            "C / C++ / Objective-C",
-            keywords=words(_C_KW),
-            literals=words("true false NULL nullptr nil Nil YES NO"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(DQ, CHAR8),
-            preprocessor=True,
-            at_keywords=True,
-            capitalized_types=True,
-        ),
-        L(
-            "java",
-            "Java",
-            keywords=words(_JAVA_KW),
-            literals=words("true false null"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(TRIPLE_DQ, DQ, CHAR8),
-            capitalized_types=True,
-            decorators=True,
-        ),
-        L(
-            "kotlin",
-            "Kotlin",
-            keywords=words(_KOTLIN_KW),
-            literals=words("true false null"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(TRIPLE_DQ, DQ, CHAR8),
-            capitalized_types=True,
-            decorators=True,
-            sigils=b"$",
-        ),
-        L(
-            "javascript",
-            "JavaScript",
-            keywords=words(_JS_KW),
-            literals=words("true false null undefined NaN Infinity"),
-            builtins=words("console window document require module exports process globalThis"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=JS_STRINGS,
-            ident_extra=b"$",
-            ident_start_extra=b"$",
-            decorators=True,
-            capitalized_types=True,
-        ),
-        L(
-            "typescript",
-            "TypeScript",
-            keywords=words(_TS_KW),
-            types=words("string number boolean object symbol bigint any unknown never void"),
-            literals=words("true false null undefined NaN Infinity"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=JS_STRINGS,
-            ident_extra=b"$",
-            ident_start_extra=b"$",
-            decorators=True,
-            capitalized_types=True,
-        ),
-    )
+_C_FAMILY: tuple[Language, ...] = (
+    L(
+        "swift",
+        "Swift",
+        keywords=words(_SWIFT_KW),
+        literals=words("true false nil"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(TRIPLE_DQ, DQ),
+        capitalized_types=True,
+        decorators=True,
+        preprocessor=True,
+    ),
+    L(
+        "c",
+        "C / C++ / Objective-C",
+        keywords=words(_C_KW),
+        literals=words("true false NULL nullptr nil Nil YES NO"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(DQ, CHAR8),
+        preprocessor=True,
+        at_keywords=True,
+        capitalized_types=True,
+    ),
+    L(
+        "java",
+        "Java",
+        keywords=words(_JAVA_KW),
+        literals=words("true false null"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(TRIPLE_DQ, DQ, CHAR8),
+        capitalized_types=True,
+        decorators=True,
+    ),
+    L(
+        "kotlin",
+        "Kotlin",
+        keywords=words(_KOTLIN_KW),
+        literals=words("true false null"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(TRIPLE_DQ, DQ, CHAR8),
+        capitalized_types=True,
+        decorators=True,
+        sigils=b"$",
+    ),
+    L(
+        "javascript",
+        "JavaScript",
+        keywords=words(_JS_KW),
+        literals=words("true false null undefined NaN Infinity"),
+        builtins=words("console window document require module exports process globalThis"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=JS_STRINGS,
+        ident_extra=b"$",
+        ident_start_extra=b"$",
+        decorators=True,
+        capitalized_types=True,
+    ),
+    L(
+        "typescript",
+        "TypeScript",
+        keywords=words(_TS_KW),
+        types=words("string number boolean object symbol bigint any unknown never void"),
+        literals=words("true false null undefined NaN Infinity"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=JS_STRINGS,
+        ident_extra=b"$",
+        ident_start_extra=b"$",
+        decorators=True,
+        capitalized_types=True,
+    ),
+)
 
 
-def _scripting() -> tuple[Language, ...]:
-    return (
-        L(
-            "python",
-            "Python",
-            keywords=words(
-                "and as assert async await break class continue def del elif else "
-                "except finally for from global if import in is lambda nonlocal not "
-                "or pass raise return try while with yield match case"
-            ),
-            literals=words("True False None"),
-            builtins=words(
-                "print len range int str float list dict set tuple open isinstance "
-                "super enumerate zip map filter sorted min max sum any all abs type "
-                "object self cls"
-            ),
-            line_comments=lc("#"),
-            strings=(TRIPLE_DQ, TRIPLE_SQ, DQ, SQ),
-            decorators=True,
-            capitalized_types=True,
+_SCRIPTING: tuple[Language, ...] = (
+    L(
+        "python",
+        "Python",
+        keywords=words(
+            "and as assert async await break class continue def del elif else "
+            "except finally for from global if import in is lambda nonlocal not "
+            "or pass raise return try while with yield match case"
         ),
-        L(
-            "ruby",
-            "Ruby",
-            keywords=words(
-                "BEGIN END alias and begin break case class def defined? do else "
-                "elsif end ensure for if in module next not or redo rescue retry "
-                "return super then undef unless until when while yield require "
-                "require_relative attr_accessor attr_reader attr_writer private "
-                "protected public include extend lambda proc"
-            ),
-            literals=words("true false nil self"),
-            builtins=words("puts print p raise"),
-            line_comments=lc("#"),
-            block_comments=((b"=begin", b"=end"),),
-            sigils=b"@$",
-            symbols=True,
-            capitalized_types=True,
+        literals=words("True False None"),
+        builtins=words(
+            "print len range int str float list dict set tuple open isinstance "
+            "super enumerate zip map filter sorted min max sum any all abs type "
+            "object self cls"
         ),
-        L(
-            "go",
-            "Go",
-            keywords=words(
-                "break case chan const continue default defer else fallthrough for "
-                "func go goto if import interface map package range return select "
-                "struct switch type var"
-            ),
-            types=words(
-                "bool byte complex64 complex128 error float32 float64 int int8 int16 "
-                "int32 int64 rune string uint uint8 uint16 uint32 uint64 uintptr any "
-                "comparable"
-            ),
-            literals=words("true false nil iota"),
-            builtins=words(
-                "append cap close complex copy delete imag len make new panic print "
-                "println real recover"
-            ),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(DQ, rule("`", escape=False, multiline=True), CHAR8),
+        line_comments=lc("#"),
+        strings=(TRIPLE_DQ, TRIPLE_SQ, DQ, SQ),
+        decorators=True,
+        capitalized_types=True,
+    ),
+    L(
+        "ruby",
+        "Ruby",
+        keywords=words(
+            "BEGIN END alias and begin break case class def defined? do else "
+            "elsif end ensure for if in module next not or redo rescue retry "
+            "return super then undef unless until when while yield require "
+            "require_relative attr_accessor attr_reader attr_writer private "
+            "protected public include extend lambda proc"
         ),
-        L(
-            "rust",
-            "Rust",
-            keywords=words(
-                "as async await break const continue crate dyn else enum extern fn "
-                "for if impl in let loop match mod move mut pub ref return self Self "
-                "static struct super trait type unsafe use where while macro_rules "
-                "union"
-            ),
-            types=words(
-                "i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize f32 f64 bool char " "str"
-            ),
-            literals=words("true false"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(rule('"', multiline=True), rule("'", max_length=6)),
-            capitalized_types=True,
-            hash_attributes=True,
-            macro_bang=True,
+        literals=words("true false nil self"),
+        builtins=words("puts print p raise"),
+        line_comments=lc("#"),
+        block_comments=((b"=begin", b"=end"),),
+        sigils=b"@$",
+        symbols=True,
+        capitalized_types=True,
+    ),
+    L(
+        "go",
+        "Go",
+        keywords=words(
+            "break case chan const continue default defer else fallthrough for "
+            "func go goto if import interface map package range return select "
+            "struct switch type var"
         ),
-        L(
-            "csharp",
-            "C#",
-            keywords=words(_CSHARP_KW),
-            literals=words("true false null"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(TRIPLE_DQ, DQ, CHAR8),
-            preprocessor=True,
-            capitalized_types=True,
+        types=words(
+            "bool byte complex64 complex128 error float32 float64 int int8 int16 "
+            "int32 int64 rune string uint uint8 uint16 uint32 uint64 uintptr any "
+            "comparable"
         ),
-        L(
-            "php",
-            "PHP",
-            keywords=words(_PHP_KW),
-            literals=words("true false null TRUE FALSE NULL"),
-            line_comments=lc("//", "#"),
-            block_comments=C_BLOCK,
-            sigils=b"$",
-            capitalized_types=True,
+        literals=words("true false nil iota"),
+        builtins=words(
+            "append cap close complex copy delete imag len make new panic print "
+            "println real recover"
         ),
-    )
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(DQ, rule("`", escape=False, multiline=True), CHAR8),
+    ),
+    L(
+        "rust",
+        "Rust",
+        keywords=words(
+            "as async await break const continue crate dyn else enum extern fn "
+            "for if impl in let loop match mod move mut pub ref return self Self "
+            "static struct super trait type unsafe use where while macro_rules "
+            "union"
+        ),
+        types=words("i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize f32 f64 bool char " "str"),
+        literals=words("true false"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(rule('"', multiline=True), rule("'", max_length=6)),
+        capitalized_types=True,
+        hash_attributes=True,
+        macro_bang=True,
+    ),
+    L(
+        "csharp",
+        "C#",
+        keywords=words(_CSHARP_KW),
+        literals=words("true false null"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(TRIPLE_DQ, DQ, CHAR8),
+        preprocessor=True,
+        capitalized_types=True,
+    ),
+    L(
+        "php",
+        "PHP",
+        keywords=words(_PHP_KW),
+        literals=words("true false null TRUE FALSE NULL"),
+        line_comments=lc("//", "#"),
+        block_comments=C_BLOCK,
+        sigils=b"$",
+        capitalized_types=True,
+    ),
+)
 
 
-def _shells() -> tuple[Language, ...]:
-    return (
-        L(
-            "shell",
-            "Shell",
-            keywords=words(
-                "if then else elif fi for while until do done case esac function in "
-                "select return local export declare readonly unset shift source alias "
-                "typeset"
-            ),
-            builtins=words(_SHELL_BUILTINS),
-            literals=words("true false"),
-            line_comments=lc("#"),
-            hash_comment_needs_space=True,
-            strings=(
-                rule('"', multiline=True),
-                rule("'", escape=False, multiline=True),
-                rule("`", multiline=True),
-            ),
-            sigils=b"$",
-            ident_extra=b"-",
+_SHELLS: tuple[Language, ...] = (
+    L(
+        "shell",
+        "Shell",
+        keywords=words(
+            "if then else elif fi for while until do done case esac function in "
+            "select return local export declare readonly unset shift source alias "
+            "typeset"
         ),
-        L(
-            "fish",
-            "Fish",
-            keywords=words(
-                "function end if else switch case for in while begin return set and " "or not"
-            ),
-            builtins=words("echo printf cd set_color string math test contains"),
-            literals=words("true false"),
-            line_comments=lc("#"),
-            hash_comment_needs_space=True,
-            sigils=b"$",
+        builtins=words(_SHELL_BUILTINS),
+        literals=words("true false"),
+        line_comments=lc("#"),
+        hash_comment_needs_space=True,
+        strings=(
+            rule('"', multiline=True),
+            rule("'", escape=False, multiline=True),
+            rule("`", multiline=True),
         ),
-        L(
-            "powershell",
-            "PowerShell",
-            keywords=words(
-                "begin break catch class continue data define do dynamicparam else "
-                "elseif end exit filter finally for foreach from function if in param "
-                "process return switch throw trap try until using var while"
-            ),
-            literals=words("$true $false $null"),
-            case_insensitive=True,
-            line_comments=lc("#"),
-            block_comments=((b"<#", b"#>"),),
-            sigils=b"$",
-            ident_extra=b"-",
+        sigils=b"$",
+        ident_extra=b"-",
+    ),
+    L(
+        "fish",
+        "Fish",
+        keywords=words(
+            "function end if else switch case for in while begin return set and " "or not"
         ),
-        L(
-            "batch",
-            "Batch",
-            keywords=words(
-                "echo set if else goto call exit for in do not exist defined "
-                "errorlevel setlocal endlocal pause shift start cd copy del move"
-            ),
-            case_insensitive=True,
-            line_comments=lc("::", "rem "),
-            strings=(DQ,),
-            sigils=b"%",
-            line_labels=False,
+        builtins=words("echo printf cd set_color string math test contains"),
+        literals=words("true false"),
+        line_comments=lc("#"),
+        hash_comment_needs_space=True,
+        sigils=b"$",
+    ),
+    L(
+        "powershell",
+        "PowerShell",
+        keywords=words(
+            "begin break catch class continue data define do dynamicparam else "
+            "elseif end exit filter finally for foreach from function if in param "
+            "process return switch throw trap try until using var while"
         ),
-        L(
-            "sql",
-            "SQL",
-            keywords=words(_SQL_KW),
-            types=words(
-                "integer int bigint smallint text varchar char boolean bool real float "
-                "double numeric decimal date time timestamp datetime blob json jsonb uuid "
-                "serial"
-            ),
-            literals=words("null true false"),
-            case_insensitive=True,
-            line_comments=lc("--"),
-            block_comments=C_BLOCK,
-            strings=(SQ, DQ),
+        literals=words("$true $false $null"),
+        case_insensitive=True,
+        line_comments=lc("#"),
+        block_comments=((b"<#", b"#>"),),
+        sigils=b"$",
+        ident_extra=b"-",
+    ),
+    L(
+        "batch",
+        "Batch",
+        keywords=words(
+            "echo set if else goto call exit for in do not exist defined "
+            "errorlevel setlocal endlocal pause shift start cd copy del move"
         ),
-        L(
-            "lua",
-            "Lua",
-            keywords=words(
-                "and break do else elseif end for function goto if in local not or "
-                "repeat return then until while"
-            ),
-            literals=words("true false nil"),
-            block_comments=((b"--[[", b"]]"),),
-            line_comments=lc("--"),
-            strings=(rule("[[", "]]", escape=False, multiline=True), DQ, SQ),
+        case_insensitive=True,
+        line_comments=lc("::", "rem "),
+        strings=(DQ,),
+        sigils=b"%",
+        line_labels=False,
+    ),
+    L(
+        "sql",
+        "SQL",
+        keywords=words(_SQL_KW),
+        types=words(
+            "integer int bigint smallint text varchar char boolean bool real float "
+            "double numeric decimal date time timestamp datetime blob json jsonb uuid "
+            "serial"
         ),
-    )
+        literals=words("null true false"),
+        case_insensitive=True,
+        line_comments=lc("--"),
+        block_comments=C_BLOCK,
+        strings=(SQ, DQ),
+    ),
+    L(
+        "lua",
+        "Lua",
+        keywords=words(
+            "and break do else elseif end for function goto if in local not or "
+            "repeat return then until while"
+        ),
+        literals=words("true false nil"),
+        block_comments=((b"--[[", b"]]"),),
+        line_comments=lc("--"),
+        strings=(rule("[[", "]]", escape=False, multiline=True), DQ, SQ),
+    ),
+)
 
 
-def _functional() -> tuple[Language, ...]:
-    return (
-        L(
-            "dart",
-            "Dart",
-            keywords=words(_DART_KW),
-            literals=words("true false null"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(TRIPLE_DQ, TRIPLE_SQ, DQ, SQ),
-            capitalized_types=True,
-            decorators=True,
-            sigils=b"$",
+_FUNCTIONAL: tuple[Language, ...] = (
+    L(
+        "dart",
+        "Dart",
+        keywords=words(_DART_KW),
+        literals=words("true false null"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(TRIPLE_DQ, TRIPLE_SQ, DQ, SQ),
+        capitalized_types=True,
+        decorators=True,
+        sigils=b"$",
+    ),
+    L(
+        "scala",
+        "Scala",
+        keywords=words(_SCALA_KW),
+        literals=words("true false null"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(TRIPLE_DQ, DQ, CHAR8),
+        capitalized_types=True,
+        decorators=True,
+    ),
+    L(
+        "haskell",
+        "Haskell",
+        keywords=words(
+            "case class data default deriving do else foreign if import in infix "
+            "infixl infixr instance let module newtype of then type where "
+            "qualified as hiding"
         ),
-        L(
-            "scala",
-            "Scala",
-            keywords=words(_SCALA_KW),
-            literals=words("true false null"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(TRIPLE_DQ, DQ, CHAR8),
-            capitalized_types=True,
-            decorators=True,
+        literals=words("True False Nothing Just"),
+        line_comments=lc("--"),
+        block_comments=((b"{-", b"-}"),),
+        strings=(DQ, rule("'", max_length=6)),
+        capitalized_types=True,
+        ident_extra=b"'",
+    ),
+    L(
+        "elixir",
+        "Elixir",
+        keywords=words(
+            "def defp defmodule defmacro defstruct defprotocol defimpl do end fn "
+            "if else unless case cond when with for receive after try catch rescue "
+            "raise import require alias use quote unquote and or not in"
         ),
-        L(
-            "haskell",
-            "Haskell",
-            keywords=words(
-                "case class data default deriving do else foreign if import in infix "
-                "infixl infixr instance let module newtype of then type where "
-                "qualified as hiding"
-            ),
-            literals=words("True False Nothing Just"),
-            line_comments=lc("--"),
-            block_comments=((b"{-", b"-}"),),
-            strings=(DQ, rule("'", max_length=6)),
-            capitalized_types=True,
-            ident_extra=b"'",
+        literals=words("true false nil"),
+        line_comments=lc("#"),
+        strings=(TRIPLE_DQ, DQ, SQ),
+        symbols=True,
+        sigils=b"@",
+        capitalized_types=True,
+    ),
+    L(
+        "erlang",
+        "Erlang",
+        keywords=words(
+            "after begin case catch end fun if of receive try when andalso orelse "
+            "div rem band bor bxor bnot bsl bsr not and or xor module export "
+            "import record define"
         ),
-        L(
-            "elixir",
-            "Elixir",
-            keywords=words(
-                "def defp defmodule defmacro defstruct defprotocol defimpl do end fn "
-                "if else unless case cond when with for receive after try catch rescue "
-                "raise import require alias use quote unquote and or not in"
-            ),
-            literals=words("true false nil"),
-            line_comments=lc("#"),
-            strings=(TRIPLE_DQ, DQ, SQ),
-            symbols=True,
-            sigils=b"@",
-            capitalized_types=True,
+        literals=words("true false undefined ok error"),
+        line_comments=lc("%"),
+        strings=(DQ,),
+        capitalized_types=True,
+        at_keywords=False,
+    ),
+    L(
+        "clojure",
+        "Clojure / Lisp",
+        keywords=words(
+            "def defn defn- defmacro defrecord defprotocol let fn if do loop recur "
+            "when when-not cond case ns require import quote try catch finally "
+            "throw and or not lambda define setq defun progn"
         ),
-        L(
-            "erlang",
-            "Erlang",
-            keywords=words(
-                "after begin case catch end fun if of receive try when andalso orelse "
-                "div rem band bor bxor bnot bsl bsr not and or xor module export "
-                "import record define"
-            ),
-            literals=words("true false undefined ok error"),
-            line_comments=lc("%"),
-            strings=(DQ,),
-            capitalized_types=True,
-            at_keywords=False,
+        literals=words("nil true false t"),
+        line_comments=lc(";"),
+        strings=(rule('"', multiline=True),),
+        ident_extra=b"-?!*+<>=/.",
+        symbols=True,
+    ),
+    L(
+        "julia",
+        "Julia",
+        keywords=words(
+            "function end if elseif else for while begin let return break "
+            "continue module using import export struct mutable abstract type "
+            "primitive macro quote do try catch finally const global local in "
+            "where"
         ),
-        L(
-            "clojure",
-            "Clojure / Lisp",
-            keywords=words(
-                "def defn defn- defmacro defrecord defprotocol let fn if do loop recur "
-                "when when-not cond case ns require import quote try catch finally "
-                "throw and or not lambda define setq defun progn"
-            ),
-            literals=words("nil true false t"),
-            line_comments=lc(";"),
-            strings=(rule('"', multiline=True),),
-            ident_extra=b"-?!*+<>=/.",
-            symbols=True,
-        ),
-        L(
-            "julia",
-            "Julia",
-            keywords=words(
-                "function end if elseif else for while begin let return break "
-                "continue module using import export struct mutable abstract type "
-                "primitive macro quote do try catch finally const global local in "
-                "where"
-            ),
-            literals=words("true false nothing missing"),
-            block_comments=((b"#=", b"=#"),),
-            line_comments=lc("#"),
-            strings=(TRIPLE_DQ, DQ),
-            capitalized_types=True,
-            decorators=True,
-        ),
-        L(
-            "zig",
-            "Zig",
-            keywords=words(_ZIG_KW),
-            types=words(
-                "i8 i16 i32 i64 u8 u16 u32 u64 usize isize f32 f64 bool void type " "anyerror"
-            ),
-            literals=words("true false null undefined"),
-            line_comments=lc("//"),
-            decorators=True,
-            capitalized_types=True,
-        ),
-    )
+        literals=words("true false nothing missing"),
+        block_comments=((b"#=", b"=#"),),
+        line_comments=lc("#"),
+        strings=(TRIPLE_DQ, DQ),
+        capitalized_types=True,
+        decorators=True,
+    ),
+    L(
+        "zig",
+        "Zig",
+        keywords=words(_ZIG_KW),
+        types=words("i8 i16 i32 i64 u8 u16 u32 u64 usize isize f32 f64 bool void type " "anyerror"),
+        literals=words("true false null undefined"),
+        line_comments=lc("//"),
+        decorators=True,
+        capitalized_types=True,
+    ),
+)
 
 
-def _config_like() -> tuple[Language, ...]:
-    return (
-        L(
-            "nix",
-            "Nix",
-            keywords=words("let in with rec inherit if then else assert import"),
-            literals=words("true false null"),
-            line_comments=lc("#"),
-            block_comments=C_BLOCK,
-            strings=(rule("''", escape=False, multiline=True), rule('"', multiline=True)),
-            ident_extra=b"-",
+_CONFIG_LIKE: tuple[Language, ...] = (
+    L(
+        "nix",
+        "Nix",
+        keywords=words("let in with rec inherit if then else assert import"),
+        literals=words("true false null"),
+        line_comments=lc("#"),
+        block_comments=C_BLOCK,
+        strings=(rule("''", escape=False, multiline=True), rule('"', multiline=True)),
+        ident_extra=b"-",
+    ),
+    L(
+        "hcl",
+        "HCL / Terraform",
+        keywords=words(
+            "resource data variable output module provider locals terraform for "
+            "in if for_each count depends_on"
         ),
-        L(
-            "hcl",
-            "HCL / Terraform",
-            keywords=words(
-                "resource data variable output module provider locals terraform for "
-                "in if for_each count depends_on"
-            ),
-            literals=words("true false null"),
-            line_comments=lc("#", "//"),
-            block_comments=C_BLOCK,
-            strings=(DQ,),
-            key_separators=b"",
+        literals=words("true false null"),
+        line_comments=lc("#", "//"),
+        block_comments=C_BLOCK,
+        strings=(DQ,),
+        key_separators=b"",
+    ),
+    L(
+        "graphql",
+        "GraphQL",
+        keywords=words(
+            "query mutation subscription fragment on type interface union enum "
+            "input scalar schema extend directive implements"
         ),
-        L(
-            "graphql",
-            "GraphQL",
-            keywords=words(
-                "query mutation subscription fragment on type interface union enum "
-                "input scalar schema extend directive implements"
-            ),
-            literals=words("true false null"),
-            line_comments=lc("#"),
-            strings=(TRIPLE_DQ, DQ),
-            decorators=True,
-            sigils=b"$",
-            capitalized_types=True,
+        literals=words("true false null"),
+        line_comments=lc("#"),
+        strings=(TRIPLE_DQ, DQ),
+        decorators=True,
+        sigils=b"$",
+        capitalized_types=True,
+    ),
+    L(
+        "protobuf",
+        "Protocol Buffers",
+        keywords=words(
+            "syntax package import option message enum service rpc returns "
+            "repeated optional required oneof map reserved extend stream edition"
         ),
-        L(
-            "protobuf",
-            "Protocol Buffers",
-            keywords=words(
-                "syntax package import option message enum service rpc returns "
-                "repeated optional required oneof map reserved extend stream edition"
-            ),
-            types=words(
-                "double float int32 int64 uint32 uint64 sint32 sint64 fixed32 fixed64 "
-                "sfixed32 sfixed64 bool string bytes"
-            ),
-            literals=words("true false"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            capitalized_types=True,
+        types=words(
+            "double float int32 int64 uint32 uint64 sint32 sint64 fixed32 fixed64 "
+            "sfixed32 sfixed64 bool string bytes"
         ),
-        L(
-            "perl",
-            "Perl",
-            keywords=words(
-                "my our local sub if elsif else unless while until for foreach do "
-                "last next redo return use no package require BEGIN END print qw eq ne "
-                "lt gt le ge and or not"
-            ),
-            line_comments=lc("#"),
-            sigils=b"$@%",
+        literals=words("true false"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        capitalized_types=True,
+    ),
+    L(
+        "perl",
+        "Perl",
+        keywords=words(
+            "my our local sub if elsif else unless while until for foreach do "
+            "last next redo return use no package require BEGIN END print qw eq ne "
+            "lt gt le ge and or not"
         ),
-        L(
-            "r",
-            "R",
-            keywords=words(
-                "if else repeat while function for in next break library require " "return"
-            ),
-            literals=words("TRUE FALSE NULL Inf NaN NA"),
-            line_comments=lc("#"),
-            ident_extra=b".",
+        line_comments=lc("#"),
+        sigils=b"$@%",
+    ),
+    L(
+        "r",
+        "R",
+        keywords=words("if else repeat while function for in next break library require " "return"),
+        literals=words("TRUE FALSE NULL Inf NaN NA"),
+        line_comments=lc("#"),
+        ident_extra=b".",
+    ),
+    L(
+        "vb",
+        "Visual Basic",
+        keywords=words(
+            "dim as if then else elseif end sub function return for each next "
+            "while wend do loop select case class module public private protected "
+            "friend shared new imports namespace property get set byval byref "
+            "optional integer string boolean double object and or not is"
         ),
-        L(
-            "vb",
-            "Visual Basic",
-            keywords=words(
-                "dim as if then else elseif end sub function return for each next "
-                "while wend do loop select case class module public private protected "
-                "friend shared new imports namespace property get set byval byref "
-                "optional integer string boolean double object and or not is"
-            ),
-            literals=words("true false nothing"),
-            case_insensitive=True,
-            line_comments=lc("'"),
-            strings=(rule('"', escape=False),),
+        literals=words("true false nothing"),
+        case_insensitive=True,
+        line_comments=lc("'"),
+        strings=(rule('"', escape=False),),
+    ),
+    L(
+        "ocaml",
+        "OCaml / F#",
+        keywords=words(
+            "let rec in match with fun function if then else type of module "
+            "struct sig end open begin val mutable and or not when"
         ),
-        L(
-            "ocaml",
-            "OCaml / F#",
-            keywords=words(
-                "let rec in match with fun function if then else type of module "
-                "struct sig end open begin val mutable and or not when"
-            ),
-            literals=words("true false"),
-            block_comments=((b"(*", b"*)"),),
-            line_comments=lc("//"),
-            strings=(DQ,),
-            capitalized_types=True,
-        ),
-        L(
-            "elm",
-            "Elm",
-            keywords=words(
-                "module exposing import as type alias case of if then else let in " "port"
-            ),
-            line_comments=lc("--"),
-            block_comments=((b"{-", b"-}"),),
-            strings=(TRIPLE_DQ, DQ),
-            capitalized_types=True,
-        ),
-    )
+        literals=words("true false"),
+        block_comments=((b"(*", b"*)"),),
+        line_comments=lc("//"),
+        strings=(DQ,),
+        capitalized_types=True,
+    ),
+    L(
+        "elm",
+        "Elm",
+        keywords=words("module exposing import as type alias case of if then else let in " "port"),
+        line_comments=lc("--"),
+        block_comments=((b"{-", b"-}"),),
+        strings=(TRIPLE_DQ, DQ),
+        capitalized_types=True,
+    ),
+)
 
 
-def _build_tools() -> tuple[Language, ...]:
-    return (
-        L(
-            "asm",
-            "Assembly",
-            line_comments=lc(";", "#", "//"),
-            block_comments=C_BLOCK,
-            dot_directives=True,
-            line_labels=True,
-            strings=(DQ,),
+_BUILD_TOOLS: tuple[Language, ...] = (
+    L(
+        "asm",
+        "Assembly",
+        line_comments=lc(";", "#", "//"),
+        block_comments=C_BLOCK,
+        dot_directives=True,
+        line_labels=True,
+        strings=(DQ,),
+    ),
+    L(
+        "cmake",
+        "CMake",
+        keywords=words(_CMAKE_KW),
+        case_insensitive=True,
+        line_comments=lc("#"),
+        sigils=b"$",
+        strings=(rule('"', multiline=True),),
+    ),
+    L(
+        "make",
+        "Makefile",
+        keywords=words(
+            "ifeq ifneq ifdef ifndef else endif include define endef export "
+            "override unexport vpath"
         ),
-        L(
-            "cmake",
-            "CMake",
-            keywords=words(_CMAKE_KW),
-            case_insensitive=True,
-            line_comments=lc("#"),
-            sigils=b"$",
-            strings=(rule('"', multiline=True),),
+        line_comments=lc("#"),
+        sigils=b"$",
+        line_labels=True,
+        ident_extra=b"-.",
+        ident_start_extra=b".",
+        strings=(DQ, SQ),
+    ),
+    L(
+        "docker",
+        "Dockerfile",
+        keywords=words(
+            "from run cmd label maintainer expose env add copy entrypoint volume "
+            "user workdir arg onbuild stopsignal healthcheck shell as"
         ),
-        L(
-            "make",
-            "Makefile",
-            keywords=words(
-                "ifeq ifneq ifdef ifndef else endif include define endef export "
-                "override unexport vpath"
-            ),
-            line_comments=lc("#"),
-            sigils=b"$",
-            line_labels=True,
-            ident_extra=b"-.",
-            ident_start_extra=b".",
-            strings=(DQ, SQ),
-        ),
-        L(
-            "docker",
-            "Dockerfile",
-            keywords=words(
-                "from run cmd label maintainer expose env add copy entrypoint volume "
-                "user workdir arg onbuild stopsignal healthcheck shell as"
-            ),
-            case_insensitive=True,
-            line_comments=lc("#"),
-            sigils=b"$",
-        ),
-        L(
-            "solidity",
-            "Solidity",
-            keywords=words(_SOLIDITY_KW),
-            types=words("uint int address bool string bytes uint256 int256 bytes32 uint8"),
-            literals=words("true false"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            capitalized_types=True,
-        ),
-        L(
-            "latex",
-            "LaTeX",
-            line_comments=lc("%"),
-            strings=(),
-            sigils=b"\\",
-            sigil_tok="k",
-            wrap=True,
-        ),
-    )
+        case_insensitive=True,
+        line_comments=lc("#"),
+        sigils=b"$",
+    ),
+    L(
+        "solidity",
+        "Solidity",
+        keywords=words(_SOLIDITY_KW),
+        types=words("uint int address bool string bytes uint256 int256 bytes32 uint8"),
+        literals=words("true false"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        capitalized_types=True,
+    ),
+    L(
+        "latex",
+        "LaTeX",
+        line_comments=lc("%"),
+        strings=(),
+        sigils=b"\\",
+        sigil_tok="k",
+        wrap=True,
+    ),
+)
 
 
-def _markup_and_data() -> tuple[Language, ...]:
-    return (
-        L(
-            "css",
-            "CSS",
-            mode="css",
-            literals=CSS_LITERALS,
-            block_comments=C_BLOCK,
-            at_keywords=True,
-            ident_extra=b"-",
-            ident_start_extra=b"-",
-        ),
-        L(
-            "scss",
-            "SCSS / Sass / Less",
-            mode="css",
-            literals=CSS_LITERALS,
-            block_comments=C_BLOCK,
-            line_comments=lc("//"),
-            at_keywords=True,
-            ident_extra=b"-",
-            ident_start_extra=b"-",
-            sigils=b"$",
-        ),
-        L("json", "JSON", literals=words("true false null"), strings=(DQ,), key_separators=b":"),
-        L(
-            "jsonc",
-            "JSON（含註解）",
-            literals=words("true false null Infinity NaN"),
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(DQ, SQ),
-            key_separators=b":",
-        ),
-        L(
-            "strings",
-            "Strings",
-            line_comments=lc("//"),
-            block_comments=C_BLOCK,
-            strings=(DQ,),
-            key_separators=b"=",
-        ),
-        L("xml", "XML", mode="markup"),
-        L("html", "HTML", mode="markup", embedded=(("script", "javascript"), ("style", "css"))),
-        L(
-            "vue",
-            "Vue / Svelte",
-            mode="markup",
-            embedded=(("script", "typescript"), ("style", "scss")),
-        ),
-        L("yaml", "YAML", mode="keyValue", line_comments=lc("#"), key_separators=b":"),
-        L("toml", "TOML", mode="keyValue", line_comments=lc("#"), key_separators=b"="),
-        L("ini", "INI / 設定檔", mode="keyValue", line_comments=lc("#", ";"), key_separators=b"=:"),
-        L(
-            "properties",
-            "Properties",
-            mode="keyValue",
-            line_comments=lc("#", "!"),
-            key_separators=b"=:",
-        ),
-        L("dotenv", "環境變數 (.env)", mode="keyValue", line_comments=lc("#"), key_separators=b"="),
-        L("diff", "Diff / Patch", mode="diff"),
-        L("log", "記錄檔", mode="log", wrap=True, word_toks=log_tokens(), strings=(DQ,)),
-        L("ignore", "忽略規則", line_comments=lc("#"), strings=()),
-        L("subtitles", "字幕", strings=(), wrap=True),
-        L("text", "純文字", mode="plain", wrap=True),
-    )
+_MARKUP_AND_DATA: tuple[Language, ...] = (
+    L(
+        "css",
+        "CSS",
+        mode="css",
+        literals=CSS_LITERALS,
+        block_comments=C_BLOCK,
+        at_keywords=True,
+        ident_extra=b"-",
+        ident_start_extra=b"-",
+    ),
+    L(
+        "scss",
+        "SCSS / Sass / Less",
+        mode="css",
+        literals=CSS_LITERALS,
+        block_comments=C_BLOCK,
+        line_comments=lc("//"),
+        at_keywords=True,
+        ident_extra=b"-",
+        ident_start_extra=b"-",
+        sigils=b"$",
+    ),
+    L("json", "JSON", literals=words("true false null"), strings=(DQ,), key_separators=b":"),
+    L(
+        "jsonc",
+        "JSON（含註解）",
+        literals=words("true false null Infinity NaN"),
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(DQ, SQ),
+        key_separators=b":",
+    ),
+    L(
+        "strings",
+        "Strings",
+        line_comments=lc("//"),
+        block_comments=C_BLOCK,
+        strings=(DQ,),
+        key_separators=b"=",
+    ),
+    L("xml", "XML", mode="markup"),
+    L("html", "HTML", mode="markup", embedded=(("script", "javascript"), ("style", "css"))),
+    L(
+        "vue",
+        "Vue / Svelte",
+        mode="markup",
+        embedded=(("script", "typescript"), ("style", "scss")),
+    ),
+    L("yaml", "YAML", mode="keyValue", line_comments=lc("#"), key_separators=b":"),
+    L("toml", "TOML", mode="keyValue", line_comments=lc("#"), key_separators=b"="),
+    L("ini", "INI / 設定檔", mode="keyValue", line_comments=lc("#", ";"), key_separators=b"=:"),
+    L(
+        "properties",
+        "Properties",
+        mode="keyValue",
+        line_comments=lc("#", "!"),
+        key_separators=b"=:",
+    ),
+    L("dotenv", "環境變數 (.env)", mode="keyValue", line_comments=lc("#"), key_separators=b"="),
+    L("diff", "Diff / Patch", mode="diff"),
+    L("log", "記錄檔", mode="log", wrap=True, word_toks=log_tokens(), strings=(DQ,)),
+    L("ignore", "忽略規則", line_comments=lc("#"), strings=()),
+    L("subtitles", "字幕", strings=(), wrap=True),
+    L("text", "純文字", mode="plain", wrap=True),
+)
 
 
 def table() -> tuple[Language, ...]:
     """全部語言（順序與原版相同）。"""
     return (
-        _c_family()
-        + _scripting()
-        + _shells()
-        + _functional()
-        + _config_like()
-        + _build_tools()
-        + _markup_and_data()
+        _C_FAMILY
+        + _SCRIPTING
+        + _SHELLS
+        + _FUNCTIONAL
+        + _CONFIG_LIKE
+        + _BUILD_TOOLS
+        + _MARKUP_AND_DATA
     )
 
 
