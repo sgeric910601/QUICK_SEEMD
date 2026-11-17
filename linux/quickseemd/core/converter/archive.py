@@ -100,7 +100,21 @@ def create_7z(src: Path, out: Path, ctx) -> None:  # noqa: ANN001
 # ---------------------------------------------------------------- 解壓縮
 
 
+DISK_MARGIN = 64 * 1024 * 1024  # 解壓縮時保留給系統的磁碟空間
+
+
+def _free_bytes(path: Path) -> int:
+    return shutil.disk_usage(path).free
+
+
+def _no_space() -> errors.QSError:
+    return errors.write_failed("解壓縮後的檔案太大，磁碟空間不足。")
+
+
 def _stream_copy(opener: Callable[[], Any], out: Path, check: Check) -> None:
+    """邊解壓邊寫；寫入量超過可用空間（保留一些給系統）就停止，避免解壓縮炸彈塞滿磁碟。"""
+    limit = _free_bytes(out.parent) - DISK_MARGIN
+    written = 0
     try:
         with opener() as fin, open(out, "xb") as fout:
             while True:
@@ -108,6 +122,9 @@ def _stream_copy(opener: Callable[[], Any], out: Path, check: Check) -> None:
                 chunk = fin.read(CHUNK)
                 if not chunk:
                     break
+                written += len(chunk)
+                if written > limit:
+                    raise _no_space()
                 fout.write(chunk)
     except (OSError, EOFError, lzma.LZMAError) as exc:
         raise errors.unreadable(str(exc)) from exc
@@ -121,9 +138,8 @@ def _extract_single(path: Path, kind: str, dest: Path, check: Check) -> Path:
 
 
 def _check_space(dest: Path, needed: int) -> None:
-    free = shutil.disk_usage(dest).free
-    if needed > free:
-        raise errors.write_failed("解壓縮後的檔案太大，磁碟空間不足。")
+    if needed > _free_bytes(dest) - DISK_MARGIN:
+        raise _no_space()
 
 
 def zip_name(info: zipfile.ZipInfo) -> str:

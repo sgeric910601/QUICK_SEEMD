@@ -23,7 +23,9 @@ _REAL = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
-MAX_XML_NODES = 5_000_000  # XML plist 的元素上限（避免惡意檔案吃光記憶體）
+MAX_XML_NODES = 5_000_000
+# 二進位 plist 可以重複參照同一個物件，展開成樹之後的節點上限
+MAX_NODES = 5_000_000  # XML plist 的元素上限（避免惡意檔案吃光記憶體）
 
 XML_HEADER = (
     '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -176,11 +178,8 @@ def _float_text(d: float) -> Value:
     return Num(repr(d))
 
 
-def from_foundation(obj: Any) -> Value:
-    """plistlib 讀出的物件 → 值（字典鍵排序，同原版）。"""
-    if isinstance(obj, str):
-        return obj
-    if isinstance(obj, bool):
+def _scalar(obj: Any) -> Value:
+    if isinstance(obj, (str, bool)):
         return obj
     if isinstance(obj, int):
         return Num(str(obj))
@@ -191,11 +190,21 @@ def from_foundation(obj: Any) -> Value:
         return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(obj, (bytes, bytearray)):
         return base64.b64encode(bytes(obj)).decode("ascii")
-    if isinstance(obj, (list, tuple)):
-        return tuple(from_foundation(v) for v in obj)
-    if isinstance(obj, dict):
-        return Obj(tuple((k, from_foundation(obj[k])) for k in sorted(obj, key=str)))
     return str(obj)
+
+
+def from_foundation(obj: Any, budget: list[int] | None = None) -> Value:
+    """plistlib 讀出的物件 → 值（字典鍵排序，同原版）；展開的節點數超過上限就停止。"""
+    budget = budget if budget is not None else [MAX_NODES]
+    budget[0] -= 1
+    if budget[0] < 0:
+        raise errors.invalid_data("plist 檔案太大，無法轉換。")
+    if isinstance(obj, (list, tuple)):
+        return tuple(from_foundation(v, budget) for v in obj)
+    if isinstance(obj, dict):
+        keys = sorted(obj, key=str)
+        return Obj(tuple((k, from_foundation(obj[k], budget)) for k in keys))
+    return _scalar(obj)
 
 
 def read_plist(data: bytes) -> Value:
@@ -214,4 +223,8 @@ def read_plist(data: bytes) -> Value:
         obj = plistlib.loads(data)
     except Exception as exc:  # noqa: BLE001 — plistlib 會丟各種例外，一律視為格式錯誤
         raise errors.invalid_data("不是正確的 plist 檔案。") from exc
-    return from_foundation(obj)
+    try:
+        with deep_recursion():
+            return from_foundation(obj)
+    except RecursionError as exc:
+        raise errors.invalid_data("plist 檔案太大，無法轉換。") from exc

@@ -428,3 +428,14 @@ def test_xlsx_traversal_part_names_are_refused(tmp_path: Path) -> None:
         z.writestr("../evil.xml", _one_cell_sheet("A1"))
     with pytest.raises(errors.QSError):
         xlsx.read_xlsx(path)
+
+
+def test_objects_with_distinct_keys_are_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 每個物件的鍵都不同：表格會是 N × N，輸入很小卻會展開成巨大的表格
+    monkeypatch.setattr(tables, "MAX_CELLS", 10_000)
+    items = tuple(Obj(((f"k{i}", Num("1")),)) for i in range(200))
+    with pytest.raises(errors.QSError) as exc:
+        tables.table_from_json(items, "n")
+    assert "表格太大" in str(exc.value)
+    small = tuple(Obj(((f"k{i}", Num("1")),)) for i in range(50))
+    assert len(tables.table_from_json(small, "n").rows) == 51

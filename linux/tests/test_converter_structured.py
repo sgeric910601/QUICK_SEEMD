@@ -414,3 +414,16 @@ def test_xml_plist_node_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(errors.QSError) as exc:
         plistdata.read_plist(xml)
     assert str(exc.value) == "資料格式不正確：plist 檔案太大，無法轉換。"
+
+
+def test_binary_plist_shared_references_are_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 二進位 plist 可以重複參照同一個陣列：檔案很小，展開後卻是 2 的 N 次方
+    monkeypatch.setattr(plistdata, "MAX_NODES", 1000)
+    node: list = ["leaf"]
+    for _ in range(20):
+        node = [node, node]
+    data = plistlib.dumps(node, fmt=plistlib.FMT_BINARY)
+    assert len(data) < 2000
+    with pytest.raises(errors.QSError) as exc:
+        plistdata.read_plist(data)
+    assert str(exc.value) == "資料格式不正確：plist 檔案太大，無法轉換。"

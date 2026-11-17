@@ -406,3 +406,19 @@ def test_7z_traversal_is_refused(tmp_path: Path, outdir: Path) -> None:
     args = [backends.require("bsdtar"), "--format", "7zip", "-cf", str(src), "-C", str(stage)]
     process.run_checked(args + ["-P", "../evil.txt"], "bsdtar")
     _assert_refused(src, outdir, tmp_path)
+
+
+def test_single_file_decompression_respects_disk_space(
+    tmp_path: Path, outdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import gzip
+
+    from quickseemd.core.converter import archive
+
+    src = tmp_path / "big.bin.gz"
+    src.write_bytes(gzip.compress(b"\0" * 300_000))
+    monkeypatch.setattr(archive, "_free_bytes", lambda _p: 100_000)
+    with pytest.raises(errors.QSError) as exc:
+        run(src, "extract", outdir)
+    assert "磁碟空間不足" in str(exc.value)
+    assert list(outdir.iterdir()) == []

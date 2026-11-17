@@ -15,6 +15,8 @@ from .structured import Num, Obj, Value, cell_text
 _WHITESPACES = "\t" + "".join(
     chr(c) for c in (0x20, 0xA0, 0x1680, *range(0x2000, 0x200B), 0x202F, 0x205F, 0x3000)
 )
+# 展開成表格後的儲存格上限（物件陣列的鍵各不相同時，小檔案也會變成 N × N 的大表格）
+MAX_CELLS = 5_000_000
 _NUMERIC = re.compile(r"-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?")
 
 
@@ -114,6 +116,8 @@ def _objects_table(items: tuple, name: str) -> Table:
             if k not in seen:
                 seen.add(k)
                 headers.append(k)
+    if len(headers) * (len(items) + 1) > MAX_CELLS:
+        raise errors.invalid_data(f"表格太大（超過 {MAX_CELLS:,} 個儲存格），無法轉換。")
     rows = [tuple(headers)]
     for item in items:
         values = dict(item.members)  # 重複鍵時取最後一個（同原版字典）
