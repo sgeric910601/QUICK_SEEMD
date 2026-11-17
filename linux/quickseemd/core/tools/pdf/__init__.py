@@ -8,5 +8,14 @@ from __future__ import annotations
 from ...model import ToolDefinition
 from .organize import ORGANIZE, ROTATE
 from .pages import DELETE_PAGES, MERGE, SPLIT
+from .stamp import PAGE_NUMBERS, WATERMARK
 
-TOOLS: list[ToolDefinition] = [MERGE, SPLIT, ORGANIZE, DELETE_PAGES, ROTATE]
+TOOLS: list[ToolDefinition] = [
+    MERGE,
+    SPLIT,
+    ORGANIZE,
+    DELETE_PAGES,
+    ROTATE,
+    WATERMARK,
+    PAGE_NUMBERS,
+]
