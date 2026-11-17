@@ -90,7 +90,7 @@ def tint_class(screen: Gdk.Screen, rgb: tuple[float, float, float]) -> str:
     if name not in _tint_classes:
         css = (
             f".{name} progress {{ background-color: {color}; border-color: {color}; }}\n"
-            f".{name} label {{ color: {color}; }}\n"
+            f".{name} button.qs-link label {{ color: {color}; }}\n"
         )
         provider = Gtk.CssProvider()
         provider.load_from_data(css.encode())
@@ -222,7 +222,17 @@ class HudWindow(Gtk.Window):
                 self._rows[item.id] = view
                 self._box.pack_start(view.widget, False, False, 0)
             self._box.reorder_child(view.widget, index)
+        self._shrink()
+
+    def _shrink(self) -> None:
+        """內容變少時縮回剛好的高度（等版面算好再縮一次）。"""
         self.resize(hm.HUD_WIDTH, 1)
+
+        def again() -> bool:
+            self.resize(hm.HUD_WIDTH, 1)
+            return False
+
+        GLib.idle_add(again)
 
     def _refresh(self, view: _RowView, item: QueueItem) -> None:
         if view.progress is not None:

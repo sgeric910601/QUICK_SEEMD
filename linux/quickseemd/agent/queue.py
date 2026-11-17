@@ -254,6 +254,11 @@ class JobQueue:
         if not self._items:
             self._observer.queue_empty()
 
+    def shutdown(self) -> None:
+        """程式要結束了：取消執行中的工作（工作程序的整個程序群組都會結束）。"""
+        for job in list(self._jobs.values()):
+            job.cancel()
+
     def clear(self) -> None:
         """面板自動隱藏時清空清單（工作中的項目不會在這時候被清）。"""
         self._items = [i for i in self._items if i.status in (Status.RUNNING, Status.WAITING)]

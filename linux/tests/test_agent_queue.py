@@ -370,3 +370,12 @@ def test_path_objects_are_kept(setup, tmp_path, fake_tools):
     f.write_text("x")
     queue.run_action("other.zip", [str(f)])
     assert queue.items[0].files == (Path(f),)
+
+
+def test_shutdown_cancels_running_job(setup, tmp_path, fake_tools):
+    queue, rec, jobs = setup
+    f = tmp_path / "a.txt"
+    f.write_text("x")
+    queue.run_action("other.zip", [f])
+    queue.shutdown()
+    assert jobs[0].cancelled

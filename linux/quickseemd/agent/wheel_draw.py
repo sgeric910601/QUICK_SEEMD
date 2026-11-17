@@ -79,6 +79,7 @@ def _disk(cr: cairo.Context, pal: Palette) -> None:
         cr.arc(C, C + 6, OUTER + 18, 0, 2 * math.pi)
         cr.fill()
     cr.set_source_rgba(*pal.bg[:3], 0.94 if pal.composited else 1.0)
+    cr.new_path()
     cr.arc(C, C, OUTER, 0, 2 * math.pi)
     cr.fill()
 
@@ -148,6 +149,7 @@ def _fit_hint(cr: cairo.Context, text: str, width: int):
 def _draw_center(
     cr: cairo.Context, state: WheelState, hovered: bool, pal: Palette, file_icon: FileIconLoader
 ) -> None:
+    cr.new_path()  # 清掉上一個標籤留下的目前點，不然會多畫一條線
     cr.arc(C, C, CENTER_RADIUS, 0, 2 * math.pi)
     cr.set_source_rgba(*pal.bg[:3], 1.0)
     cr.fill_preserve()

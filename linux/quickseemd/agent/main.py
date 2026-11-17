@@ -112,6 +112,8 @@ class AgentApp(Gtk.Application):
 
     def quit(self) -> None:  # noqa: D102 — 覆寫 Gio.Application.quit：先放掉 hold
         log.info("背景程式結束")
+        if hasattr(self, "queue"):
+            self.queue.shutdown()
         if self._ready:
             self._ready = False
             self.release()
