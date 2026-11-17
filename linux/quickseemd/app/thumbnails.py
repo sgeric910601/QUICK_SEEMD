@@ -2,6 +2,7 @@
 
 來源順序：系統縮圖快取（thumbnail::path）→ 圖片直接縮小 → PDF 第一頁（Poppler）
 → 影片畫面（ffmpeg）→ 沒有（介面改顯示檔案類型圖示）。快取鍵 path|mtime|寬x高。
+圖片一律先讀檔頭取得尺寸，超過 MAX_DECODE_PIXELS 就不解碼。
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import logging
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 import gi
@@ -24,11 +26,35 @@ from .mainloop import to_main  # noqa: E402
 LOG = logging.getLogger(__name__)
 CACHE_LIMIT = 400
 FRAME_TIMEOUT = 20.0
+MAX_DECODE_PIXELS = 64_000_000  # 超過就不解碼（改顯示檔案類型圖示）
+ROTATED_ORIENTATIONS = ("5", "6", "7", "8")
 
 Callback = Callable[["GdkPixbuf.Pixbuf | None"], None]
 
 
+# ---------------------------------------------------------------- 圖片（先讀尺寸，大圖不解碼）
+
+
+def image_size(path: Path) -> tuple[int, int] | None:
+    """只讀檔頭取得像素大小（未轉正）；讀不懂的檔案回傳 None。"""
+    try:
+        fmt, w, h = GdkPixbuf.Pixbuf.get_file_info(str(path))
+    except (GLib.Error, TypeError):
+        return None
+    if fmt is None or w <= 0 or h <= 0:
+        return None
+    return int(w), int(h)
+
+
+def decodable(path: Path) -> bool:
+    """可以安全解碼嗎：讀得到尺寸而且不超過 MAX_DECODE_PIXELS（避免一張圖吃掉幾 GB 記憶體）。"""
+    size = image_size(path)
+    return size is not None and size[0] * size[1] <= MAX_DECODE_PIXELS
+
+
 def _from_file(path: Path, w: int, h: int) -> GdkPixbuf.Pixbuf | None:
+    if not decodable(path):
+        return None
     try:
         pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), w, h, True)
     except GLib.Error:
@@ -36,7 +62,35 @@ def _from_file(path: Path, w: int, h: int) -> GdkPixbuf.Pixbuf | None:
     return pb.apply_embedded_orientation() or pb
 
 
+@dataclass(frozen=True)
+class Preview:
+    """裁剪畫面用的預覽：轉正後的預覽圖、原圖（轉正後）像素大小、是否大到不解碼。"""
+
+    pixbuf: GdkPixbuf.Pixbuf | None
+    width: int
+    height: int
+    too_big: bool = False
+
+
+def load_preview(path: Path, max_side: int) -> Preview:
+    size = image_size(path)
+    if size is None:
+        return Preview(None, 0, 0)
+    w, h = size
+    if w * h > MAX_DECODE_PIXELS:
+        return Preview(None, w, h, too_big=True)
+    try:
+        pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), max_side, max_side, True)
+    except GLib.Error as exc:
+        LOG.info("無法預覽圖片：%s", exc.message)
+        return Preview(None, w, h)
+    if (pb.get_option("orientation") or "1") in ROTATED_ORIENTATIONS:
+        w, h = h, w
+    return Preview(pb.apply_embedded_orientation() or pb, w, h)
+
+
 def _from_bytes(data: bytes, w: int, h: int) -> GdkPixbuf.Pixbuf | None:
+    """解碼我們自己產生的小 PNG（PDF 頁面、影片畫面）。"""
     loader = GdkPixbuf.PixbufLoader()
     try:
         loader.write(data)
@@ -64,18 +118,25 @@ def _system_thumbnail(path: Path, w: int, h: int) -> GdkPixbuf.Pixbuf | None:
     return _from_file(Path(thumb), w, h) if thumb and Path(thumb).is_file() else None
 
 
-def render_pdf_page(path: Path, index: int, max_side: int) -> bytes | None:
-    """PDF 某一頁畫成 PNG（白底）；整理 PDF 的縮圖也用它。"""
-    import cairo  # noqa: PLC0415
+# ---------------------------------------------------------------- PDF（每次載入只開一次文件）
 
+
+def open_pdf(path: Path):  # noqa: ANN201 — Poppler.Document 或 None
     gi.require_version("Poppler", "0.18")
     from gi.repository import Poppler  # noqa: PLC0415
 
     try:
-        doc = Poppler.Document.new_from_file(path.as_uri(), None)
-        page = doc.get_page(index)
-    except GLib.Error:
+        return Poppler.Document.new_from_file(Path(path).resolve().as_uri(), None)
+    except GLib.Error as exc:
+        LOG.info("讀不到 PDF：%s", exc.message)
         return None
+
+
+def render_page(doc, index: int, max_side: int) -> bytes | None:  # noqa: ANN001
+    """已開啟的 PDF 某一頁畫成 PNG（白底，最長邊 max_side）。"""
+    import cairo  # noqa: PLC0415
+
+    page = doc.get_page(index)
     if page is None:
         return None
     pw, ph = page.get_size()
@@ -91,14 +152,18 @@ def render_pdf_page(path: Path, index: int, max_side: int) -> bytes | None:
     return buf.getvalue()
 
 
-def pdf_page_count(path: Path) -> int:
-    gi.require_version("Poppler", "0.18")
-    from gi.repository import Poppler  # noqa: PLC0415
+def render_pdf_page(path: Path, index: int, max_side: int) -> bytes | None:
+    """只要一頁時（檔案縮圖）。"""
+    doc = open_pdf(path)
+    return render_page(doc, index, max_side) if doc is not None else None
 
-    try:
-        return int(Poppler.Document.new_from_file(path.as_uri(), None).get_n_pages())
-    except GLib.Error:
-        return 0
+
+# ---------------------------------------------------------------- 影片
+
+
+def ffmpeg_input(path: Path) -> list[str]:
+    """ffmpeg／ffprobe 的輸入：只准讀本機檔案（不跟著播放清單去連網路）、絕對路徑。"""
+    return ["-protocol_whitelist", "file,pipe", "-i", str(Path(path).resolve())]
 
 
 def video_frame(path: Path, seconds: float, height: int) -> bytes | None:
@@ -106,13 +171,13 @@ def video_frame(path: Path, seconds: float, height: int) -> bytes | None:
     ffmpeg = backends.find("ffmpeg")
     if ffmpeg is None:
         return None
-    cache = backends.cache_dir()
+    cache = backends.cache_dir().resolve()
     cache.mkdir(parents=True, exist_ok=True)
     work = naming.make_work_dir(cache)
     try:
         out = work / "frame.png"
         args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n"]
-        args += ["-ss", f"{max(seconds, 0):.3f}", "-i", str(path.resolve()), "-frames:v", "1"]
+        args += ["-ss", f"{max(seconds, 0):.3f}", *ffmpeg_input(path), "-frames:v", "1"]
         args += ["-vf", f"scale=-2:{int(height)}", str(out)]
         res = process.run(args, timeout=FRAME_TIMEOUT)
         if res.returncode != 0 or not out.is_file():

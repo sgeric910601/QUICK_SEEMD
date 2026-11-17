@@ -371,7 +371,12 @@ class ConverterPage(Gtk.Box):
 
     def _analyze(self, uid: int, path: Path) -> None:
         def work() -> None:
-            to_main(self._analyzed, uid, cmod.analyze_path(path))
+            try:
+                analysis = cmod.analyze_path(path)
+            except Exception:  # noqa: BLE001 — 分析失敗也要結束「分析中」
+                LOG.exception("分析檔案失敗：%s", path)
+                analysis = cmod.Analysis((), (), "", None)
+            to_main(self._analyzed, uid, analysis)
 
         threading.Thread(target=work, daemon=True).start()
 

@@ -15,9 +15,9 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
 
-from .. import options_model  # noqa: E402
+from .. import options_model, thumbnails  # noqa: E402
 from ..mainloop import to_main  # noqa: E402
 from ..widgets import hbox, icon, label, secondary, vbox  # noqa: E402
 from . import ViewContext  # noqa: E402
@@ -28,21 +28,18 @@ PREVIEW_MAX = 1800
 HANDLE_PX = 12
 MIN_PX = 24
 PAD = 16
-ROTATED_ORIENTATIONS = ("5", "6", "7", "8")
 
 
-def _load(path: Path) -> tuple[GdkPixbuf.Pixbuf | None, int, int]:
-    """預覽圖（已依 EXIF 轉正，最長邊 1800）與轉正後的原圖像素大小。"""
-    try:
-        info = GdkPixbuf.Pixbuf.get_file_info(str(path))
-        pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), PREVIEW_MAX, PREVIEW_MAX, True)
-    except GLib.Error as exc:
-        LOG.info("無法預覽圖片：%s", exc.message)
-        return None, 0, 0
-    w, h = (info[1], info[2]) if info and info[0] else (pb.get_width(), pb.get_height())
-    if (pb.get_option("orientation") or "1") in ROTATED_ORIENTATIONS:
-        w, h = h, w
-    return pb.apply_embedded_orientation() or pb, int(w), int(h)
+def preview_error(preview: thumbnails.Preview) -> str | None:
+    """預覽失敗時的說明；有預覽圖時回傳 None。"""
+    if preview.pixbuf is not None:
+        return None
+    if preview.too_big:
+        return (
+            f"這張圖片太大（{preview.width} × {preview.height} px），無法在這裡預覽；"
+            "可以選擇比例自動裁切。"
+        )
+    return "無法預覽這張圖片"
 
 
 class CropView:
@@ -71,14 +68,21 @@ class CropView:
         threading.Thread(target=self._worker, args=(path, self._token), daemon=True).start()
 
     def _worker(self, path: Path, token: int) -> None:
-        pb, w, h = _load(path)
-        to_main(self._loaded, token, pb, w, h)
+        """背景執行緒：先讀尺寸，大圖不解碼；任何錯誤都要回報（不能卡在讀取中）。"""
+        try:
+            preview = thumbnails.load_preview(path, PREVIEW_MAX)
+        except Exception:  # noqa: BLE001
+            LOG.exception("讀取圖片失敗：%s", path)
+            preview = thumbnails.Preview(None, 0, 0)
+        to_main(self._loaded, token, preview)
 
-    def _loaded(self, token: int, pb: GdkPixbuf.Pixbuf | None, w: int, h: int) -> bool:
+    def _loaded(self, token: int, preview: thumbnails.Preview) -> bool:
         if token != self._token:
             return False
-        self.pixbuf, self.img_w, self.img_h = pb, w, h
-        self.error.set_visible(pb is None)
+        self.pixbuf, self.img_w, self.img_h = preview.pixbuf, preview.width, preview.height
+        message = preview_error(preview)
+        self.error_text.set_label(message or "")
+        self.error.set_visible(message is not None)
         self.reset()
         return False
 
@@ -143,9 +147,8 @@ class CropView:
         drag.connect("drag-update", self._drag_update)
         drag.connect("drag-end", lambda *_a: self._drag_end())
         self.area.add_controller(drag)
-        self.error = hbox(
-            6, icon("dialog-warning-symbolic", 16, "qs-dim"), label("無法預覽這張圖片", "qs-dim")
-        )
+        self.error_text = label("無法預覽這張圖片", "qs-dim", wrap=True)
+        self.error = hbox(6, icon("dialog-warning-symbolic", 16, "qs-dim"), self.error_text)
         self.error.set_visible(False)
         box = vbox(
             12,
