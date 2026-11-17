@@ -32,13 +32,13 @@ def test_same_format_never_overwrites(jpg_file):
 
 
 def test_presets_png_and_heic(jpg_file, outdir):
-    outs, _ = run_tool("image.convert", [jpg_file], outdir, preset="image.to-png")
+    outs, _ = run_tool("image.convert", [jpg_file], outdir, action="image.to-png")
     assert outs[0].name == "相片.png"
     with Image.open(outs[0]) as im:
         assert im.format == "PNG"
     if not formats.is_writable("heic"):
         pytest.skip("沒有 heif-enc")
-    outs, _ = run_tool("image.convert", [jpg_file], outdir, preset="image.to-heic")
+    outs, _ = run_tool("image.convert", [jpg_file], outdir, action="image.to-heic")
     assert outs[0].name == "相片.heic"
     assert b"ftypheic" in outs[0].read_bytes()[:32]
 

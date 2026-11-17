@@ -140,7 +140,7 @@ def pixel_size(path: str | Path) -> tuple[int, int] | None:
         try:
             with Image.open(p) as im:
                 w, h = im.size
-                orientation = _orientation(im) if im.format in ("JPEG", "MPO", "TIFF", "WEBP") else 1
+                orientation = exif_orientation(im) if im.format in ("JPEG", "MPO", "TIFF", "WEBP") else 1
                 return (h, w) if orientation in _ROTATED_ORIENTATIONS else (w, h)
         except _READ_ERRORS:
             pass
@@ -178,7 +178,7 @@ def heif_kind(path: Path) -> str | None:
 # ---------------------------------------------------------------- Pillow
 
 
-def _orientation(im: Image.Image) -> int:
+def exif_orientation(im: Image.Image) -> int:
     try:
         value = int(im.getexif().get(0x0112, 1) or 1)
     except (TypeError, ValueError, OSError, SyntaxError):
@@ -188,7 +188,7 @@ def _orientation(im: Image.Image) -> int:
 
 def _from_pillow(p: Path, im: Image.Image, all_frames: bool, size: int) -> Source:
     fmt = formats.from_pillow(im.format)
-    orientation = _orientation(im)
+    orientation = exif_orientation(im)
     raw_frames = _raw_frames(im, all_frames and fmt == "gif")
     info = im.info
     icc = info.get("icc_profile") or None

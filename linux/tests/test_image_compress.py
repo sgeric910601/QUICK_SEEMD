@@ -42,7 +42,7 @@ def test_summary_texts():
 def test_jpeg_recommended(tmp_path, outdir):
     src = _photo(tmp_path)
     before = digest(src)
-    outs, ctx = run_tool("image.compress", [src], outdir, preset="image.compress-recommended")
+    outs, ctx = run_tool("image.compress", [src], outdir, action="image.compress-recommended")
     out = outs[0]
     assert out.name == "相片-已壓縮.jpg"
     assert out.stat().st_size < src.stat().st_size

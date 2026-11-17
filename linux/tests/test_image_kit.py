@@ -17,13 +17,13 @@ def run_tool(
     tool_id: str,
     files: list[Path],
     outdir: Path | None = None,
-    preset: str | None = None,
+    action: str | None = None,
     **values: Any,
 ) -> tuple[list[Path], ToolContext]:
-    """用工具預設值（或右鍵預設）加上 values 執行，回傳（輸出, 執行環境）。"""
+    """用工具預設值（或右鍵動作的預設）加上 values 執行，回傳（輸出, 執行環境）。"""
     tool = registry.tool(tool_id)
     assert tool is not None, f"沒有登記工具 {tool_id}"
-    vals = tool.values_for_preset(preset) if preset else tool.defaults()
+    vals = tool.values_for_preset(action) if action else tool.defaults()
     vals.update(values)
     ctx = ToolContext(outdir)
     try:

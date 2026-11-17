@@ -47,7 +47,7 @@ def photo(tmp_path):
 
 def test_location_mode_keeps_camera_and_is_lossless(photo, outdir):
     before = digest(photo)
-    outs, ctx = run_tool("image.strip-metadata", [photo], outdir, preset="image.strip-location")
+    outs, ctx = run_tool("image.strip-metadata", [photo], outdir, action="image.strip-location")
     out = outs[0]
     assert out.name == "旅行-已移除位置.jpg"
     assert _leaks(out, "location") == []
