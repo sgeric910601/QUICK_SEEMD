@@ -51,6 +51,7 @@ progressbar.qs-hud-progress trough, progressbar.qs-hud-progress progress { min-h
 """
 
 ROW_SPACING = 8
+SHRINK_DELAY_MS = 80  # 等換行文字的高度算好
 WINDOW_PADDING = 10
 TEXT_WIDTH = hm.HUD_WIDTH - 2 * WINDOW_PADDING - 2 * 12 - 34 - 12 - 2
 
@@ -198,6 +199,7 @@ class HudWindow(Gtk.Window):
             self.move(x, y)
         if not self.get_visible():
             self.show()
+            self._shrink()  # 隱藏時改的大小不會生效，顯示後再縮一次
 
     def hide_panel(self) -> None:
         self.hovering = False
@@ -232,7 +234,7 @@ class HudWindow(Gtk.Window):
             self.resize(hm.HUD_WIDTH, 1)
             return False
 
-        GLib.idle_add(again)
+        GLib.timeout_add(SHRINK_DELAY_MS, again)
 
     def _refresh(self, view: _RowView, item: QueueItem) -> None:
         if view.progress is not None:
