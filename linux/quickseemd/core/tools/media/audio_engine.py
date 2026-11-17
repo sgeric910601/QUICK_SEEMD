@@ -35,6 +35,11 @@ FORMATS: dict[str, AudioFormat] = {
     "ogg": AudioFormat("OGG", "開放的有損格式（使用 ffmpeg）", "ogg", True),
 }
 BITRATES_KBPS: tuple[int, ...] = (96, 128, 192, 256, 320)
+# libvorbis 實測可接受的最高平均位元率（kbps）：(取樣率下限, 上限)，依聲道數
+_VORBIS_CAPS: dict[int, tuple[tuple[int, int], ...]] = {
+    1: ((44_100, 240), (32_000, 160), (16_000, 80), (11_025, 48), (0, 32)),
+    2: ((32_000, 320), (16_000, 160), (11_025, 96), (0, 80)),
+}
 
 
 def bitrate_hint(kbps: int) -> str:
@@ -76,11 +81,19 @@ def matching_bitrate(info: MediaInfo, fmt: str) -> int:
     return aac_matching(info, fallback=256_000)
 
 
+def vorbis_kbps(bitrate: int, rate: int, channels: int) -> int:
+    """libvorbis 的平均位元率有上限（依取樣率與聲道），超過會直接拒絕編碼，所以先限制。"""
+    caps = _VORBIS_CAPS[2 if channels >= 2 else 1]
+    cap = next(c for threshold, c in caps if rate >= threshold)
+    return min(max(64, bitrate // 1000), cap)
+
+
 def codec_args(info: MediaInfo, out: AudioOutput) -> list[str]:
     """編碼器、取樣率、聲道與容器參數。"""
     channels = max(1, min(2, out.channels or info.channels))
     rate = out.sample_rate or info.sample_rate
-    if out.format in ("m4a", "mp3"):
+    if out.format in ("m4a", "mp3", "ogg"):
+        # AAC 與 MP3 最高 48 kHz；libvorbis 的位元率模式也不接受 48 kHz 以上
         rate = aac_sample_rate(rate)
     deep = info.bit_depth > 16
     kbps = f"{max(64, out.bitrate // 1000)}k"
@@ -92,7 +105,7 @@ def codec_args(info: MediaInfo, out: AudioOutput) -> list[str]:
         "caf": ["-c:a", "pcm_s24le" if deep else "pcm_s16le"],
         "flac": ["-c:a", "flac", "-sample_fmt", "s32" if deep else "s16"],
         "mp3": ["-c:a", "libmp3lame", "-b:a", kbps],
-        "ogg": ["-c:a", "libvorbis", "-b:a", kbps],
+        "ogg": ["-c:a", "libvorbis", "-b:a", f"{vorbis_kbps(out.bitrate, rate, channels)}k"],
     }[out.format]
     muxer = {"m4a": "ipod", "alac": "ipod"}.get(out.format, FORMATS[out.format].ext)
     container = ["-f", muxer] + (["-movflags", "+faststart"] if muxer == "ipod" else [])
