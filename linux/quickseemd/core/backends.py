@@ -62,6 +62,7 @@ BACKENDS: dict[str, Backend] = {
         Backend("7z", ("7z", "7za"), "7-Zip", "7z 壓縮檔", "p7zip-full"),
         Backend("bsdtar", ("bsdtar",), "bsdtar", "RAR／ISO 等壓縮檔", "libarchive-tools"),
         Backend("weasyprint", ("weasyprint",), "WeasyPrint", "網頁轉 PDF", "weasyprint"),
+        Backend("fc-match", ("fc-match",), "Fontconfig", "尋找字型檔", "fontconfig"),
     )
 }
 
