@@ -468,3 +468,15 @@ def test_move_keeps_source_when_it_changes_during_copy(tmp_path, monkeypatch):
     with pytest.raises(errors.QSError):
         naming.move_no_overwrite(src, dest)
     assert (src / "late.txt").exists() and (src / "a.txt").exists()
+
+
+def test_worker_applies_image_budget_to_every_tool(tmp_path):
+    """工作程序啟動時就載入像素上限：直接 Image.open 的工具（例如讀 QR）也會擋下超大圖。"""
+    from PIL import Image
+
+    big = tmp_path / "巨大.png"
+    Image.new("1", (20000, 20000)).save(big)  # 檔案很小，但有 4 億像素
+    job = WorkerJob(JobSpec("action", "other.read-qr", [str(big)]), python=sys.executable)
+    job.start()
+    res = job.wait(60)
+    assert res is not None and "上限" in res.get("error", ""), res

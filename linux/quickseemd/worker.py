@@ -40,6 +40,10 @@ def main() -> int:
         print("quickseemd.worker 必須由 QUICK_SEEMD 啟動", file=sys.stderr)
         return 2
     cap_memory()
+    # 載入圖片像素上限（Pillow 的 MAX_IMAGE_PIXELS 與「解壓縮炸彈」警告當錯誤）：
+    # 讓每個工具、萬用轉換裡直接 Image.open 的地方也一起受保護
+    from .core.tools.image import limits as _image_limits  # noqa: F401, PLC0415
+
     out = os.fdopen(int(fd_raw), "w", buffering=1, encoding="utf-8")
     write_lock = threading.Lock()
 

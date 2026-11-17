@@ -133,8 +133,11 @@ def run_spec(
     except MemoryError:
         result.error = "記憶體不足：這個檔案太大，超過可以處理的上限。"
     except Exception as exc:  # noqa: BLE001 — 任何意外都要回報成中文訊息，不能讓工作程序無聲掛掉
-        traceback.print_exc(file=sys.stderr)
-        result.error = f"發生未預期的錯誤：{exc}"
+        if type(exc).__name__ in ("DecompressionBombError", "DecompressionBombWarning"):
+            result.error = "圖片太大，超過可以處理的上限。"
+        else:
+            traceback.print_exc(file=sys.stderr)
+            result.error = f"發生未預期的錯誤：{exc}"
     finally:
         ctx.cleanup()
     result.summary = _summary_with_skips(ctx.last_message, result, spec.files)
