@@ -374,3 +374,172 @@ def test_symlink_targets_are_charged(indir, tmp_path):
     work.mkdir()
     limits = ExtractLimits(max_total_bytes=50 * MiB)
     assert "解開後超過 50 MB" in _extract_with(archive, ArchiveKind.TAR, work, limits)
+
+
+# ------------------------------------------------------------------ 連結指向後面的項目、重複名稱
+
+
+def _tar_members(path: Path, members: list[tuple[str, bytes, str]]) -> Path:
+    """members：（名稱, 內容, 連結種類 ""／"hard"／"sym"）；連結的內容是目標名稱。"""
+    with tarfile.open(path, "w") as tf:
+        for name, data, link in members:
+            info = tarfile.TarInfo(name)
+            if link:
+                info.type = tarfile.LNKTYPE if link == "hard" else tarfile.SYMTYPE
+                info.linkname = data.decode()
+                tf.addfile(info)
+            else:
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+    return path
+
+
+def _no_links(monkeypatch) -> None:
+    """模擬不支援連結的檔案系統（exFAT 之類）：tarfile 會改成複製目標。"""
+
+    def fail(*_args, **_kw):
+        raise OSError(1, "不支援連結")
+
+    monkeypatch.setattr(os, "link", fail)
+    monkeypatch.setattr(os, "symlink", fail)
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_hard_link_to_later_member_is_refused(indir, tmp_path, monkeypatch, fallback):
+    if fallback:
+        _no_links(monkeypatch)
+    archive = _tar_members(
+        indir / "later.tar",
+        [
+            ("small.txt", b"s", ""),
+            ("copy.bin", b"big.bin", "hard"),
+            ("big.bin", os.urandom(5 * MiB), ""),
+        ],
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    limits = ExtractLimits(max_total_bytes=8 * MiB)
+    msg = _extract_with(archive, ArchiveKind.TAR, work, limits)
+    assert msg.startswith("「later.tar」含有不安全的路徑「copy.bin」")
+
+
+def test_symlink_to_later_bigger_member_is_charged_under_fallback(indir, tmp_path, monkeypatch):
+    """符號連結可以指向後面的項目（tarfile 不支援連結時會從整個壓縮檔找目標來複製），成本要算進去。"""
+    _no_links(monkeypatch)
+    archive = _tar_members(
+        indir / "later.tar",
+        [("d/a_link", b"z_big.bin", "sym"), ("d/z_big.bin", os.urandom(5 * MiB), "")],
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    limits = ExtractLimits(max_total_bytes=8 * MiB)
+    assert _extract_with(archive, ArchiveKind.TAR, work, limits) == (
+        "「later.tar」解開後超過 8 MB，為了避免塞滿磁碟，已停止解壓縮。"
+    )
+
+
+def test_symlink_to_later_member_is_fine_when_links_work(indir, tmp_path):
+    """一般檔案系統上，指向後面項目的符號連結（例如依名稱排序的 current → v2）照常解開。"""
+    archive = _tar_members(
+        indir / "rel.tar",
+        [("pkg/current", b"v2", "sym"), ("pkg/v2/app.txt", b"app", "")],
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    result = unpack.extract(archive, ArchiveKind.TAR, work, ToolContext(work))
+    assert (result.path / "current" / "app.txt").read_text() == "app"
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_duplicate_member_names_are_refused(indir, tmp_path, monkeypatch, fallback):
+    if fallback:
+        _no_links(monkeypatch)
+    archive = _tar_members(
+        indir / "dup.tar",
+        [
+            ("a.bin", b"x", ""),
+            ("l1", b"a.bin", "sym"),
+            ("a.bin", os.urandom(5 * MiB), ""),
+        ],
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    limits = ExtractLimits(max_total_bytes=8 * MiB)
+    assert _extract_with(archive, ArchiveKind.TAR, work, limits) == (
+        "「dup.tar」裡有互相衝突的項目「a.bin」，無法解壓縮。"
+    )
+
+
+def test_symlink_chain_cost_follows_to_the_file(indir, tmp_path, monkeypatch):
+    _no_links(monkeypatch)
+    archive = _tar_members(
+        indir / "chain.tar",
+        [
+            ("d/big.bin", os.urandom(3 * MiB), ""),
+            ("d/l1", b"big.bin", "sym"),
+            ("d/l2", b"l1", "sym"),
+            ("d/l3", b"l2", "sym"),
+        ],
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    limits = ExtractLimits(max_total_bytes=10 * MiB)
+    assert "解開後超過 10 MB" in _extract_with(archive, ArchiveKind.TAR, work, limits)
+
+
+def test_copy_fallback_extracts_within_budget(indir, tmp_path, monkeypatch):
+    """連結失敗改成複製、但總量在額度內時照常解開，內容正確。"""
+    _no_links(monkeypatch)
+    archive = _tar_members(
+        indir / "ok.tar",
+        [("d/a.txt", b"hello", ""), ("d/b.txt", b"d/a.txt", "hard"), ("d/c.txt", b"a.txt", "sym")],
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    result = unpack.extract(archive, ArchiveKind.TAR, work, ToolContext(work))
+    assert [(result.path / n).read_bytes() for n in ("a.txt", "b.txt", "c.txt")] == [b"hello"] * 3
+
+
+def test_written_bytes_measures_real_copies(tmp_path):
+    from quickseemd.core.tools.other.unpack import _written_bytes
+
+    (tmp_path / "a").write_bytes(b"12345")
+    os.link(tmp_path / "a", tmp_path / "b")
+    (tmp_path / "c").write_bytes(b"1234567")
+    os.symlink("a", tmp_path / "s")
+
+    def member(name: str, kind: bytes, target: str = "") -> tarfile.TarInfo:
+        info = tarfile.TarInfo(name)
+        info.type = kind
+        info.linkname = target
+        return info
+
+    assert _written_bytes(member("b", tarfile.LNKTYPE, "a"), tmp_path) == 0
+    assert _written_bytes(member("c", tarfile.LNKTYPE, "a"), tmp_path) == 7
+    assert _written_bytes(member("c", tarfile.LNKTYPE, "gone"), tmp_path) == 7
+    assert _written_bytes(member("s", tarfile.SYMTYPE, "a"), tmp_path) == 0
+    assert _written_bytes(member("c", tarfile.SYMTYPE, "a"), tmp_path) == 7
+    assert _written_bytes(member("missing", tarfile.SYMTYPE, "a"), tmp_path) == 0
+    assert _written_bytes(member("d", tarfile.DIRTYPE), tmp_path) == 0
+
+
+def test_link_cost_of_loops_and_folders():
+    from quickseemd.core.tools.other.unpack import _member_cost
+
+    def member(name: str, kind: bytes, target: str = "", size: int = 0) -> tarfile.TarInfo:
+        info = tarfile.TarInfo(name)
+        info.type = kind
+        info.linkname = target
+        info.size = size
+        return info
+
+    by_key = {
+        "l1": member("l1", tarfile.SYMTYPE, "l2"),
+        "l2": member("l2", tarfile.SYMTYPE, "l1"),
+        "dir": member("dir", tarfile.DIRTYPE),
+        "f": member("f", tarfile.REGTYPE, size=9),
+    }
+    assert _member_cost(by_key["l1"], by_key) == 0
+    assert _member_cost(member("x", tarfile.SYMTYPE, "dir"), by_key) == 0
+    assert _member_cost(member("y", tarfile.SYMTYPE, "f"), by_key) == 9
+    assert _member_cost(by_key["dir"], by_key) == 0
