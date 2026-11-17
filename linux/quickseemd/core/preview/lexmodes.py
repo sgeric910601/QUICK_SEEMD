@@ -199,43 +199,42 @@ def _key_value_line(b: bytes, lang: Language, i: int, s: int, le: int, toks: lis
             run_generic(b, value, ks, le, toks)
 
 
-_SEP_CACHE: dict[bytes, re.Pattern[bytes]] = {}
+_SEP_CACHE: dict[tuple[bytes, bool], re.Pattern[bytes]] = {}
 
 
-def _separator_regex(seps: bytes) -> re.Pattern[bytes]:
-    rx = _SEP_CACHE.get(seps)
+def _separator_regex(seps: bytes, is_yaml: bool) -> re.Pattern[bytes]:
+    """找分隔符號的正規表示式；YAML 的分隔符號後面要接空白或行尾，「 #」會停止搜尋。"""
+    key = (seps, is_yaml)
+    rx = _SEP_CACHE.get(key)
     if rx is None:
-        rx = re.compile(b"[\"'#" + re.escape(seps) + b"]")
-        _SEP_CACHE[seps] = rx
+        cls = b"[" + re.escape(seps) + b"]"
+        if is_yaml:
+            rx = re.compile(b"(?P<sep>" + cls + rb"(?=[ \t]|\Z))|(?<= )(?P<hash>#)")
+        else:
+            rx = re.compile(b"(?P<sep>" + cls + b")")
+        _SEP_CACHE[key] = rx
     return rx
 
 
 def _find_separator(b: bytes, lang: Language, ks: int, le: int) -> int:
     """鍵與值之間的分隔符號位置（略過開頭的引號字串；YAML 的「 #」會停止搜尋）。"""
-    seps = lang.key_separators or b"="
     is_yaml = lang.id == "yaml"
-    rx = _separator_regex(seps)
     j = ks
+    if b[j] in (34, 39):  # 只有鍵開頭的引號算數，其他位置的引號照原版忽略
+        close = b.find(bytes((b[j],)), j + 1, le)
+        if close < 0:
+            return -1
+        j = close + 1
+    rx = _separator_regex(lang.key_separators or b"=", is_yaml)
     while True:
         m = rx.search(b, j, le)
         if m is None:
             return -1
-        j = m.start()
-        d = b[j]
-        if d in (34, 39):
-            if j == ks:
-                close = b.find(bytes((d,)), j + 1, le)
-                if close < 0:
-                    return -1
-                j = close
-            j += 1
-            continue
-        if d in seps:
-            if not is_yaml or j + 1 >= le or b[j + 1] in (32, 9):
-                return j
-        elif d == 35 and is_yaml and j > ks and b[j - 1] == 32:
+        if m.lastgroup == "sep":
+            return m.start()
+        if m.start() > ks:
             return -1
-        j += 1
+        j = m.start() + 1
 
 
 # ---------------------------------------------------------------- diff

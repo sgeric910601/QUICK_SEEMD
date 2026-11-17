@@ -190,6 +190,41 @@ def test_inline_highlighting(lang: str, src: str, expected: str) -> None:
     assert highlight.inline(src, L[lang]) == expected
 
 
+@pytest.mark.parametrize(
+    ("lang", "src", "expected"),
+    [
+        ("yaml", "a:b: c", '<span class="y">a:b</span>: c'),
+        ("yaml", "- #x: y", '<span class="p">- </span><span class="y">#x</span>: y'),
+        ("yaml", "k #c: v", 'k <span class="c">#c: v</span>'),
+        ("yaml", '"a: b": c', '<span class="y">"a: b"</span>: c'),
+        ("yaml", "'open: x", '<span class="s">\'open: x</span>'),
+        ("ini", 'a"b=c', '<span class="y">a"b</span>=c'),
+        (
+            "toml",
+            "[[bin]]\nname = 'x'",
+            '<span class="hd">[[bin]]</span>\n'
+            '<span class="y">name </span>= <span class="s">\'x\'</span>',
+        ),
+        ("properties", "! c\nk:v", '<span class="c">! c</span>\n<span class="y">k</span>:v'),
+    ],
+)
+def test_key_value_edge_cases(lang: str, src: str, expected: str) -> None:
+    assert highlight.inline(src, L[lang]) == expected
+
+
+def test_both_renderers_agree() -> None:
+    src = 'x = """a\n<b>&\n"""  # c\ny = 1\n'
+    b = src.encode()
+    toks = highlight.tokens(b, L["python"])
+    for rows in (False, True):
+        assert highlight.render(b, toks, rows) == highlight._render_pieces(b, toks, rows)
+    # 文字用光了所有可當標記的控制字元時，改用逐段跳脫
+    crowded = bytes(range(1, 32)) + b" 'a'\n"
+    toks = highlight.tokens(crowded, L["python"])
+    assert highlight._free_marks(crowded) is None
+    assert highlight.render(crowded, toks, False) == highlight._render_pieces(crowded, toks, False)
+
+
 def test_log_rows_layout() -> None:
     src = (
         "2026-10-18 09:12:01.123 INFO  [main] started\n"

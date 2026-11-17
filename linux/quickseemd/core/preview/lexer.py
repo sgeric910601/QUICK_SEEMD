@@ -90,6 +90,11 @@ class Spec:
         )
         self.number_re = re.compile(b"(?:" + number + b")" + (b"%?" if lang.mode == "css" else b""))
         self.strings = tuple((r, _string_regex(r)) for r in lang.strings)
+        # 依開頭位元組分好的字串規則：(規則, 正規表示式, 開頭只有一個字元)
+        self.strings_by_char: dict[int, tuple[tuple[StringRule, re.Pattern[bytes], bool], ...]] = {
+            c: tuple((r, rx, len(r.open) == 1) for r, rx in self.strings if r.open[0] == c)
+            for c in {r.open[0] for r in lang.strings}
+        }
         self.line_comments = tuple((c, c.translate(_CI)) for c in lang.line_comments)
         self.key_separators = frozenset(lang.key_separators)
         self.table = self._build_table()
@@ -149,6 +154,12 @@ class GenericLexer:
         self.line_start = True
         self.pending: str | None = None
         self.depth = 0
+        # 熱點用的捷徑（少一層屬性查找）
+        self.append = toks.append
+        self.word_match = spec.word_re.match
+        self.number_match = spec.number_re.match
+        self.ci = self.lang.case_insensitive
+        self.word_toks = dict(self.lang.word_toks)
 
     def tok(self, s: int, e: int, t: str | None) -> None:
         if t is not None and s < e:
@@ -276,13 +287,16 @@ class GenericLexer:
 
     def h_string(self, i: int, c: int) -> int:
         b, end = self.b, self.end
-        for r, rx in self.spec.strings:
-            if not b.startswith(r.open, i, end):
+        for r, rx, single in self.spec.strings_by_char[c]:
+            if not single and not b.startswith(r.open, i, end):
                 continue
-            m = rx.match(b, i, end)
+            # 有長度上限的規則（字元常值）只看上限範圍內：超過就不算字串，
+            # 不必掃到行尾；否則一長串沒結束的開頭會讓分析變成平方時間。
+            limit = end if r.max_length <= 0 else min(end, i + r.max_length)
+            m = rx.match(b, i, limit)
             k = m.end()
             closed = m.group("close") is not None
-            if r.max_length > 0 and (not closed or k - i > r.max_length):
+            if r.max_length > 0 and not closed:
                 continue
             t = "s"
             if self.spec.key_separators:
@@ -375,28 +389,29 @@ class GenericLexer:
                 return -1
             if i != self.start and b[i - 1] in self.spec.ident:
                 return -1
-        j = self.spec.number_re.match(b, i, end).end()
-        self.tok(i, j, "n")
+        j = self.number_match(b, i, end).end()
+        self.append((i, j, "n"))
         self.line_start = False
         self.pending = None
         return j
 
     def h_ident(self, i: int, c: int) -> int:
-        b, end = self.b, self.end
-        j = self.spec.word_re.match(b, i, end).end()
-        word = b[i:j]
-        key = word.lower() if self.lang.case_insensitive else word
+        b = self.b
+        j = self.word_match(b, i, self.end).end()
+        key = b[i:j].lower() if self.ci else b[i:j]
         t, j = self._classify(key, c, j)
-        self.tok(i, j, t)
+        if t is not None:
+            self.append((i, j, t))
         self.line_start = False
         return j
 
     def _classify(self, key: bytes, c: int, j: int) -> tuple[str | None, int]:
         lang, b, end = self.lang, self.b, self.end
         n = b[j] if j < end else 0
-        word_tok = lang.word_toks.get(key)
-        if word_tok is not None:
-            return word_tok, j
+        if self.word_toks:
+            word_tok = self.word_toks.get(key)
+            if word_tok is not None:
+                return word_tok, j
         if key in lang.keywords:
             if key in TYPE_DECL:
                 self.pending = "t"

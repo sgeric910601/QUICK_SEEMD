@@ -78,3 +78,60 @@ def test_two_mib_file_render_within_budget(tmp_path: Path) -> None:
     elapsed = time.perf_counter() - start
     assert doc.kind_label == "Python"
     assert elapsed < BUDGET_SECONDS, f"render: {elapsed:.2f}s"
+
+
+# ------------------------------------------------------------------ 惡意輸入（不可變成平方時間）
+
+LINE_BYTES = 7990  # 剛好低於「單行太長就不上色」的門檻，整份都會上色
+
+
+def _hostile_lines(unit: str) -> str:
+    line = (unit * (LINE_BYTES // len(unit)))[:LINE_BYTES]
+    return ((line + "\n") * (TARGET_BYTES // (LINE_BYTES + 1) + 1))[:TARGET_BYTES]
+
+
+HOSTILE = [
+    ("c", "'"),
+    ("c", "\\'"),
+    ("c", "/*"),
+    ("rust", "\\'"),
+    ("haskell", "\\'"),
+    ("python", '"'),
+    ("python", "'''"),
+    ("json", '"'),
+    ("shell", "${"),
+    ("html", '<a b="'),
+    ("xml", "<!--"),
+    ("yaml", "'''"),
+    ("css", "&a"),
+]
+SLOW_HOSTILE = [
+    (lang, unit)
+    for lang in ("java", "kotlin", "go", "scala", "csharp", "lua", "nix", "ini", "log", "vue")
+    for unit in ("'", "\\'", '"', '\\"', "/*", "[[", "''", "<a", "${", "#[")
+]
+
+
+@pytest.mark.parametrize(("lang", "unit"), HOSTILE, ids=[f"{l}:{u}" for l, u in HOSTILE])
+def test_hostile_two_mib_within_budget(lang: str, unit: str) -> None:
+    text = _hostile_lines(unit)
+    start = time.perf_counter()
+    highlight.code_view(text, languages.BY_ID[lang])
+    elapsed = time.perf_counter() - start
+    assert elapsed < BUDGET_SECONDS, f"{lang} {unit!r}: {elapsed:.2f}s"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(("lang", "unit"), SLOW_HOSTILE, ids=[f"{l}:{u}" for l, u in SLOW_HOSTILE])
+def test_hostile_matrix_within_budget(lang: str, unit: str) -> None:
+    test_hostile_two_mib_within_budget(lang, unit)
+
+
+@pytest.mark.parametrize("lang", ["c", "java", "rust", "haskell", "scala", "go"])
+def test_unclosed_char_literals_are_linear(lang: str) -> None:
+    """原本會平方成長的情況：一行 63 KiB 的「\\'」（以前要好幾秒）。"""
+    text = "\\'" * (63 * 512)
+    start = time.perf_counter()
+    html, _ = highlight.code_view(text, languages.BY_ID[lang])
+    assert time.perf_counter() - start < 0.3
+    assert '<span class="s">' not in html
