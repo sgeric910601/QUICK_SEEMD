@@ -58,21 +58,21 @@ def write_docx(sections: Sequence[Section], headings: bool, path: Path) -> None:
     document.save(str(path))
 
 
+def _rtf_char(ch: str) -> str:
+    """一個字元的 RTF 寫法；非 ASCII 依 UTF-16 拆成 \\uN?（N 是有號 16 位元）。"""
+    if ch in "\\{}":
+        return "\\" + ch
+    if ch == "\t":
+        return "\\tab "
+    if ord(ch) < 128:
+        return ch
+    data = ch.encode("utf-16-be")
+    units = (int.from_bytes(data[i : i + 2], "big") for i in range(0, len(data), 2))
+    return "".join(f"\\u{u - 65536 if u >= 32768 else u}?" for u in units)
+
+
 def rtf_escape(text: str) -> str:
-    out: list[str] = []
-    for ch in text:
-        if ch in "\\{}":
-            out.append("\\" + ch)
-        elif ch == "\t":
-            out.append("\\tab ")
-        elif ord(ch) < 128:
-            out.append(ch)
-        else:
-            data = ch.encode("utf-16-be")
-            for i in range(0, len(data), 2):
-                unit = int.from_bytes(data[i : i + 2], "big")
-                out.append(f"\\u{unit - 65536 if unit >= 32768 else unit}?")
-    return "".join(out)
+    return "".join(_rtf_char(ch) for ch in text)
 
 
 def rtf_document(sections: Sequence[Section], headings: bool) -> str:

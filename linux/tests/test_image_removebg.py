@@ -133,3 +133,14 @@ def test_real_engine_on_photo(tmp_path, outdir):
     if formats.is_writable("heic"):
         outs, _ = run_tool("image.remove-bg", [p], outdir, format="heic", background="blur")
         assert outs[0].suffix == ".heic"
+
+
+def test_helper_argument_checks(tmp_path):
+    from quickseemd.core.tools.image import rembg_helper
+
+    assert rembg_helper.main(["helper"]) == 2
+    assert rembg_helper.main(["helper", "a.png"]) == 2
+    assert rembg_helper.main(["helper", "a.png", "b.png"]) == 2  # 必須是絕對路徑
+    src, dst = str(tmp_path / "a.png"), str(tmp_path / "b.png")
+    assert rembg_helper.main(["helper", src, dst]) == 3  # 系統的 Python 沒有 rembg
+    assert not (tmp_path / "b.png").exists()

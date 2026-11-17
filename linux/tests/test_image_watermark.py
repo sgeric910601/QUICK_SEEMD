@@ -140,3 +140,9 @@ def test_watermark_options_ui():
     )
     assert not t.option("position").is_visible({**d, "tiled": True}, {})
     assert not t.option("logo").is_visible(d, {})
+
+
+def test_multiline_text_is_flattened(tmp_path, outdir):
+    src = _plain(tmp_path)
+    outs, _ = run_tool("image.watermark", [src], outdir, text="第一行\n第二行")
+    assert _diff(src, outs[0]).sum() > 0

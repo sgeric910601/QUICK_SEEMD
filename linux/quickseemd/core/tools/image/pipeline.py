@@ -17,8 +17,11 @@ INFO_LIMIT = 50  # 選項面板最多讀前 50 個檔案的尺寸與透明度（
 
 
 def work_dir(ctx: ToolContext, for_input: Path) -> Path:
-    """和輸出位置同一顆磁碟的暫存資料夾（工作結束時自動清掉）。"""
-    return ctx.make_work_dir(ctx.output_directory(for_input))
+    """和輸出位置同一顆磁碟的暫存資料夾（工作結束時自動清掉）。
+
+    一律回傳絕對路徑：交給外部程式的路徑才不會被誤認成以「-」開頭的參數。
+    """
+    return ctx.make_work_dir(ctx.output_directory(for_input)).resolve()
 
 
 def run_file(

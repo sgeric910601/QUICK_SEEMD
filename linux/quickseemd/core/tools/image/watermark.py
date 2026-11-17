@@ -165,7 +165,8 @@ def apply(image: Image.Image, values: Values, logo: Image.Image | None) -> Image
         stamp, size = _logo_stamp(logo, w, float(values.get("logo_scale", 20)))
     else:
         font_size = max(6.0, short * float(values.get("text_size", 5)) / 100)
-        stamp, size = _text_stamp(str(values.get("text", "")), font_size, values)
+        text = " ".join(str(values.get("text", "")).split())  # 浮水印是單行文字
+        stamp, size = _text_stamp(text, font_size, values)
     if size[0] <= 0 or size[1] <= 0:
         return image
     stamp = _faded(stamp, max(0.05, min(1.0, float(values.get("opacity", 0.6)))))
