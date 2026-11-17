@@ -10,14 +10,12 @@ from __future__ import annotations
 import html
 import os
 import stat
-import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from gi.repository import GLib
-
 from ..core import errors, filetypes
 from ..core.preview import Document
+from .formatting import format_size, format_time
 
 INFO_SIZE = (640, 420)
 INFO_KIND = "檔案資訊"
@@ -69,16 +67,6 @@ def classify(path: Path) -> str:
     if mime in FONT_MIMES:
         return "font"
     return next((kind for prefix, kind in _MAJOR_KINDS if mime.startswith(prefix)), "html")
-
-
-def format_size(size: int) -> str:
-    if size < 1024:
-        return f"{size} 位元組"
-    return GLib.format_size(size)
-
-
-def format_time(epoch: float) -> str:
-    return time.strftime("%Y/%m/%d %H:%M", time.localtime(epoch))
 
 
 def info_page(

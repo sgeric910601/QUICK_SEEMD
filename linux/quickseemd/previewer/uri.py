@@ -66,7 +66,7 @@ def _valid(uri: object) -> bool:
     return GLib.uri_parse_scheme(uri) is not None
 
 
-def _name_from_uri(uri: str) -> str:
+def display_name(uri: str) -> str:
     tail = uri.rstrip("/").rsplit("/", 1)[-1]
     return GLib.uri_unescape_string(tail, None) or tail or uri
 
@@ -109,7 +109,7 @@ def resolve(uri: str, *, file_for_uri: FileFactory | None = None) -> Target:
     except GLib.Error:
         raw_path, display = None, None
     if raw_path is None:
-        name = display or gfile.get_basename() or _name_from_uri(uri)
+        name = display or gfile.get_basename() or display_name(uri)
         return Target(TargetKind.REMOTE, uri, name)
     path = Path(raw_path)
     return _classify_path(uri, path, display or path.name or raw_path)
