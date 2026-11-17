@@ -2,6 +2,8 @@
 
 macOS 的萬用檔案工具：按空白鍵預覽、分類工具箱、右鍵一鍵轉換、拖曳轉換輪盤。所有處理都在這台 Mac 上離線完成，不會上傳任何檔案。
 
+> **Linux 版**（Ubuntu 24.04、GNOME on X11、Nemo）在 [`linux/`](linux/README.md)：同樣的四種用法，安裝只要 `linux/install.sh`。
+
 ## 四種用法
 
 | 用法 | 怎麼用 |
@@ -141,6 +143,7 @@ Tools/                  命令列測試工具（qs-render、qs-convert、qs-tool
 Samples/                各種格式的範例檔
 Design/                 圖示原稿與產生程式
 scripts/                編譯、簽署、安裝、發佈、解除安裝
+linux/                  Linux 版（Python＋GTK，說明見 linux/README.md）
 VERSION                 目前版本號（發佈腳本會更新）
 ```
 
