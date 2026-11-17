@@ -122,25 +122,59 @@ def clean_env_prefix() -> list[str]:
     return args
 
 
+# 使用者資料的根目錄：沙箱裡一律換成空的 tmpfs（LibreOffice 連 SVG 的 file:// 圖片都會去讀）
+USER_DATA_ROOTS: tuple[str, ...] = ("/home", "/root", "/media", "/mnt", "/srv", "/run/media")
+# 已經整個換成 tmpfs 的系統目錄
+PRIVATE_DIRS: tuple[str, ...] = ("/tmp", "/var/tmp", "/run")
+
+
+def _masks() -> list[str]:
+    """要遮住的使用者資料根目錄（只列這台存在、且不在已遮住的目錄底下的；bwrap 遇到不存在的會失敗）。"""
+    out: list[str] = []
+    for root in USER_DATA_ROOTS:
+        if any(root.startswith(p + "/") for p in PRIVATE_DIRS) or not os.path.isdir(root):
+            continue
+        out += ["--tmpfs", root]
+    return out
+
+
 def _bwrap_base(bwrap: str, writable: Path) -> list[str]:
     root = str(Path(writable).resolve())
     args = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
     # 私有的空白暫存區與 /run（LibreOffice 的單一執行個體管道需要可寫的 /tmp 或 /var/tmp）
-    args += ["--tmpfs", "/tmp", "--tmpfs", "/var/tmp", "--tmpfs", "/run"]
-    args += ["--bind", root, root]  # 在 tmpfs 之後：暫存資料夾在 /tmp 底下也看得到
+    for private in PRIVATE_DIRS:
+        args += ["--tmpfs", private]
+    args += _masks()  # 家目錄與外接磁碟：看不到
+    args += ["--bind", root, root]  # 在 tmpfs 之後：暫存資料夾在被遮住的目錄底下也看得到
     for name in SESSION_VARIABLES:
         args += ["--unsetenv", name]
     return args + ["--unshare-net", "--die-with-parent", "--"]
 
 
-def _with_readable(prefix: list[str], paths: list[Path]) -> list[str]:
-    """在 bwrap 參數的「--」前面唯讀掛入這些路徑（輸入檔可能在被遮住的 /tmp、/run 底下）。"""
+def with_readable(prefix: list[str], paths: list[Path]) -> list[str]:
+    """在 bwrap 參數的「--」前面唯讀掛回這些檔案（輸入檔可能在被遮住的目錄底下）。
+
+    只掛檔案本身、不掛它所在的資料夾；需要的資源（例如 HTML 的圖片）由呼叫端先內嵌或複製到暫存資料夾。
+    """
     if not prefix:
         return prefix
     extra: list[str] = []
     for path in paths:
         extra += ["--ro-bind", str(path), str(path)]
     return prefix[:-1] + extra + prefix[-1:]
+
+
+_warned_unsandboxed = False
+
+
+def _warn_unsandboxed(reason: str) -> None:
+    """沒有沙箱時只警告一次（每個程序）。"""
+    global _warned_unsandboxed  # noqa: PLW0603 — 每個程序只警告一次的旗標
+    with _sandbox_lock:
+        if _warned_unsandboxed:
+            return
+        _warned_unsandboxed = True
+    log.warning("LibreOffice 沒有沙箱隔離（%s），只靠設定檔與輸入清理防護", reason)
 
 
 def sandbox_prefix(writable: Path) -> list[str]:
@@ -150,17 +184,17 @@ def sandbox_prefix(writable: Path) -> list[str]:
     """
     bwrap = backends.find("bwrap")
     if bwrap is None:
-        log.info("沒有 bwrap，LibreOffice 只靠設定檔封鎖外部連結")
+        _warn_unsandboxed("找不到 bwrap")
         return []
     with _sandbox_lock:
         ok = _sandbox_ok.get(bwrap)
     if ok is None:
         probe = process.run(_bwrap_base(bwrap, writable) + ["/bin/true"], timeout=30)
         ok = probe.returncode == 0
-        if not ok:
-            log.warning("bwrap 無法使用（%s），LibreOffice 只靠設定檔封鎖外部連結", probe.stderr)
         with _sandbox_lock:
             _sandbox_ok[bwrap] = ok
+    if not ok:
+        _warn_unsandboxed("bwrap 無法使用")
     return _bwrap_base(bwrap, writable) if ok else []
 
 
@@ -192,7 +226,7 @@ def convert(
     profile = make_profile(scratch)
     tmp = scratch / "tmp"
     tmp.mkdir()
-    sandbox = _with_readable(sandbox_prefix(scratch), [Path(src).resolve()])
+    sandbox = with_readable(sandbox_prefix(scratch), [Path(src).resolve()])
     prefix = sandbox or clean_env_prefix()  # 沒有 bwrap 也要拿掉工作階段的環境變數
     args = prefix + arguments(Path(src), filter_spec, out_dir, profile, infilter)
     env = {"SAL_USE_VCLPLUGIN": "svp", "HOME": str(scratch), "TMPDIR": str(tmp)}

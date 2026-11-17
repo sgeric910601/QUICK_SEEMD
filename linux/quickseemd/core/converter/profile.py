@@ -25,8 +25,9 @@ FFMPEG_VIDEO_EXTS = frozenset(
     {"mkv", "webm", "flv", "wmv", "ogv", "avi", "mpg", "mpeg", "ts", "m2ts", "mts", "3gp"}
     | {"vob", "rm", "rmvb", "asf", "divx", "f4v", "mod"}
 )
-# 原版的 ImageMagick 專用副檔名；eps／ps／ai 在 Linux 會被 ImageMagick 的安全政策擋下，不列入
-MAGICK_ONLY_EXTS = frozenset({"xcf", "jxr", "wdp", "pcx", "ppm", "pgm", "xpm", "xbm", "qoi"})
+# 原版的 ImageMagick 專用副檔名；eps／ps／ai 在 Linux 會被 ImageMagick 的安全政策擋下，
+# jxr／wdp 要靠外部解碼程式（delegate），我們的政策一律禁止，所以也不列入
+MAGICK_ONLY_EXTS = frozenset({"xcf", "pcx", "ppm", "pgm", "xpm", "xbm", "qoi"})
 POSTSCRIPT_EXTS = frozenset({"eps", "ps", "ai", "epsf", "epsi"})
 HEIF_EXTS = frozenset({"heic", "heif", "hif", "avif"})
 SVG_EXTS = frozenset({"svg", "svgz"})

@@ -135,8 +135,14 @@ def test_magick_arguments_name_the_coder() -> None:
         and ["-resize", "512x512>"] == keep[keep.index("-resize") : keep.index("-resize") + 2]
     )
     assert "-limit" in keep and "time" in keep
-    for pattern in ("MVG", "MSL", "TEXT", "EPS", "PDF", "XPS", "URL", "HTTPS", "EPHEMERAL"):
-        assert pattern in magick.POLICY
+    assert '<policy domain="coder" rights="none" pattern="*"/>' in magick.POLICY
+    allow = next(line for line in magick.POLICY.splitlines() if 'rights="read | write"' in line)
+    assert magick.POLICY.index('pattern="*"/>') < magick.POLICY.index(allow)  # 先全部禁止再開放
+    for coder in ("XCF", "PCX", "PPM", "TGA", "PSD", "XBM", "XPM", "QOI", "PNG", "JPEG", "WEBP"):
+        assert coder in allow
+    for coder in ("MVG", "MSL", "TEXT", "EPS", "PDF", "XPS", "URL", "HTTP", "EPHEMERAL", "SVG"):
+        assert f",{coder}," not in f",{allow.split('{')[1].split('}')[0]},"
+    assert '<policy domain="delegate" rights="none" pattern="*"/>' in magick.POLICY
     assert '<policy domain="path" rights="none" pattern="@*"/>' in magick.POLICY
     with pytest.raises(errors.QSError):
         magick.coder("")

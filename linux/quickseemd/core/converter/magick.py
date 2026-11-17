@@ -3,8 +3,8 @@
 為了安全：
 - 輸入與輸出都明確寫出格式（「XCF:檔案」），不讓 ImageMagick 依內容猜格式；
 - 檔名一律換成暫存資料夾裡的安全名稱（in.副檔名 → out.副檔名），避免檔名裡的 [、%、@ 被解讀；
-- 每次執行都帶自己的限制性 policy.xml（MAGICK_CONFIGURE_PATH）：禁止 MVG、MSL、TEXT、
-  PostScript／PDF／XPS、網址、EPHEMERAL 與「@檔案」間接讀取；
+- 每次執行都帶自己的限制性 policy.xml（MAGICK_CONFIGURE_PATH）：格式採允許清單（先全部禁止，
+  只開放需要的點陣格式），外部程式（delegate）與「@檔案」間接讀取一律禁止；
 - 加上記憶體、映射、面積、磁碟、時間上限。
 """
 
@@ -23,10 +23,11 @@ LIMITS: tuple[str, ...] = (
     "-limit", "disk", "4GiB",
     "-limit", "time", "120",
 )  # fmt: skip
-DENIED_CODERS = (
-    "MVG,MSL,TEXT,TXT,PS,PS2,PS3,EPS,EPSF,EPSI,EPI,EPT,PDF,PDFA,AI,XPS,"
-    "URL,HTTP,HTTPS,FTP,EPHEMERAL,LABEL,CAPTION,SHOW,WIN,X,SCAN,VID,MAGICK"
-)
+# 允許清單：只開放這條路線需要的點陣格式（讀：少見格式＋常見點陣；寫：PNG／JPEG／TIFF／WebP／JXL）
+ALLOWED_CODERS: tuple[str, ...] = (
+    "XCF", "PCX", "PPM", "PGM", "PBM", "PNM", "PAM", "TGA", "PSD", "XBM", "XPM", "QOI",
+    "PNG", "JPEG", "JPG", "TIFF", "TIF", "WEBP", "JXL", "GIF", "BMP", "ICO",
+)  # fmt: skip
 POLICY = f"""<?xml version="1.0" encoding="UTF-8"?>
 <policymap>
   <policy domain="resource" name="memory" value="1GiB"/>
@@ -34,9 +35,10 @@ POLICY = f"""<?xml version="1.0" encoding="UTF-8"?>
   <policy domain="resource" name="area" value="256MP"/>
   <policy domain="resource" name="disk" value="4GiB"/>
   <policy domain="resource" name="time" value="120"/>
-  <policy domain="coder" rights="none" pattern="{{{DENIED_CODERS}}}"/>
+  <policy domain="coder" rights="none" pattern="*"/>
+  <policy domain="coder" rights="read | write" pattern="{{{",".join(ALLOWED_CODERS)}}}"/>
   <policy domain="module" rights="none" pattern="{{MVG,MSL,PS,PDF,XPS,URL,TXT,LABEL}}"/>
-  <policy domain="delegate" rights="none" pattern="{{gs,ps,eps,pdf,xps,http,https,ftp,url}}"/>
+  <policy domain="delegate" rights="none" pattern="*"/>
   <policy domain="path" rights="none" pattern="@*"/>
 </policymap>
 """
