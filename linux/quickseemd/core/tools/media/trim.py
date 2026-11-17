@@ -93,8 +93,8 @@ def _copy_part(
     file: Path, info: MediaInfo, seg: tuple[float, float], out: Path, ctx: ToolContext
 ) -> bool:
     a, b = seg
-    args = ["-ss", f"{a + SEEK_PAD:.6f}"] if a > 0 else []
-    args += ["-i", str(file.absolute()), "-t", f"{b - a:.6f}"]
+    args = engine.input_args(file, start=a + SEEK_PAD if a > 0 else None)
+    args += ["-t", f"{b - a:.6f}"]
     args += engine.map_args(info) + engine.copy_args(info) + engine.container_for(file).args()
     return engine.try_ffmpeg(
         ctx, args, out, duration=b - a, message="快速剪輯（不重新編碼）…", span=(0, 0.9)
@@ -106,7 +106,8 @@ def _concat_copy(parts: list[Path], info: MediaInfo, out: Path, ctx: ToolContext
     listing = out.parent / "parts.txt"
     with open(listing, "x", encoding="utf-8") as fh:
         fh.writelines(f"file '{p.name}'\n" for p in parts)
-    args = ["-f", "concat", "-i", str(listing.absolute()), "-map", "0"]
+    # 安全模式（-safe 1）只接受清單旁邊的簡單檔名
+    args = ["-f", "concat", "-safe", "1", *engine.input_args(listing), "-map", "0"]
     args += engine.copy_args(info) + engine.container_for(out).args()
     return engine.try_ffmpeg(ctx, args, out, duration=info.duration, span=(0.9, 0.98))
 
@@ -168,7 +169,7 @@ def precise_trim(
         args += engine.encode_args(info, enc, container)
     else:
         graph = segment_filter(info, segments, engine.scale_filter(enc.size))
-        args = ["-i", str(file.absolute()), "-filter_complex", graph, "-map", "[outv]"]
+        args = engine.input_args(file) + ["-filter_complex", graph, "-map", "[outv]"]
         args += ["-map", "[outa]"] if info.has_audio else []
         args += ["-map_metadata", "0", "-map_chapters", "-1"]
         args += engine.video_codec_args(enc.codec, enc.bitrate, enc.fps)

@@ -156,7 +156,7 @@ def render(
 ) -> float:
     """輸出音訊到 out；回傳輸出長度（秒）。"""
     info.require_audio()
-    args = ["-i", str(Path(file).absolute())]
+    args = engine.input_args(Path(file))
     total = info.duration
     if segments is not None or any(f > 0 for f in fades):
         segs = segments if segments is not None else [(0.0, info.duration)]
