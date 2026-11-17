@@ -282,6 +282,19 @@ def _sandbox(tmp_path: Path) -> list[str]:
     return soffice.sandbox_prefix(tmp_path)
 
 
+SESSION_VARS = (
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+)
+
+
+def _pairs(args: list[str], flag: str) -> list[str]:
+    return [args[i + 1] for i, a in enumerate(args) if a == flag]
+
+
 def test_sandbox_prefix_limits_writes(tmp_path: Path):
     args = _sandbox(tmp_path)
     if not args:
@@ -289,8 +302,85 @@ def test_sandbox_prefix_limits_writes(tmp_path: Path):
     joined = " ".join(args)
     for flag in ("--unshare-net", "--die-with-parent", "--ro-bind / /"):
         assert flag in joined
-    binds = [args[i + 1] for i, a in enumerate(args) if a == "--bind"]
-    assert binds == [str(tmp_path.resolve())]  # 只有這次的暫存資料夾可寫
+    assert args[-1] == "--"
+    # 私有的 /tmp、/var/tmp、/run：看不到桌面工作階段的通道（D-Bus、X11 的檔案 socket）
+    assert set(_pairs(args, "--tmpfs")) >= {"/tmp", "/var/tmp", "/run"}
+    root = str(tmp_path.resolve())
+    assert _pairs(args, "--bind") == [root]  # 只有這次的暫存資料夾可寫
+    # 暫存資料夾在 tmpfs 之後才掛上（放在 /tmp 底下也看得到）
+    last_tmpfs = max(i for i, a in enumerate(args) if a == "--tmpfs")
+    assert args.index("--bind") > last_tmpfs
+    assert set(_pairs(args, "--unsetenv")) >= set(SESSION_VARS)
+
+
+def _capture_convert(tmp_path: Path, monkeypatch, src: Path) -> list[str]:
+    """攔下 soffice.convert 實際要執行的指令（假裝 LibreOffice 產生了 PDF）。"""
+    seen: list[list[str]] = []
+
+    def fake_run_checked(args, _tool, **_kw):  # noqa: ANN001, ANN003
+        seen.append(list(args))
+        outdir = Path(args[args.index("--outdir") + 1])
+        (outdir / "out.pdf").write_bytes(b"%PDF-1.4")
+
+    monkeypatch.setattr(soffice.process, "run_checked", fake_run_checked)
+    monkeypatch.setattr(soffice, "lock_path", lambda: tmp_path / "soffice.lock")
+    soffice.convert(src, "pdf", tmp_path)
+    return seen[0]
+
+
+def test_convert_binds_input_read_only_after_tmpfs(tmp_path: Path, monkeypatch):
+    if not _sandbox(tmp_path):
+        pytest.skip("這台電腦不能用 bwrap")
+    src = _docx(tmp_path, "在暫存區的文件.docx")  # 位在 /tmp 底下：要特別掛進去
+    args = _capture_convert(tmp_path, monkeypatch, src)
+    sep = args.index("--")
+    sandbox = args[:sep]
+    resolved = str(src.resolve())
+    assert resolved in _pairs(sandbox, "--ro-bind")
+    ro_index = max(i for i, a in enumerate(sandbox) if a == "--ro-bind")
+    assert ro_index > max(i for i, a in enumerate(sandbox) if a == "--tmpfs")
+    assert args[-1] == resolved
+
+
+def test_fallback_without_bwrap_strips_session_variables(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(soffice, "sandbox_prefix", lambda _writable: [])
+    args = _capture_convert(tmp_path, monkeypatch, _docx(tmp_path))
+    assert args[0] == "/usr/bin/env"
+    assert set(_pairs(args, "-u")) >= set(SESSION_VARS)
+    assert any(a.startswith("-env:UserInstallation=") for a in args)
+
+
+def test_fallback_prefix_really_removes_variables():
+    probe = "import os, json; print(json.dumps(sorted(os.environ)))"
+    env = {v: "unix:path=/run/user/1000/bus" for v in SESSION_VARS}
+    res = process.run(
+        soffice.clean_env_prefix() + ["/usr/bin/python3", "-c", probe], env=env, timeout=30
+    )
+    assert res.returncode == 0
+    assert not set(json.loads(res.stdout)) & set(SESSION_VARS)
+
+
+def test_sandbox_hides_session_channels(tmp_path: Path):
+    prefix = _sandbox(tmp_path)
+    if not prefix:
+        pytest.skip("這台電腦不能用 bwrap")
+    probe = (
+        "import json, os\n"
+        "print(json.dumps({'env': sorted(os.environ), 'run': os.listdir('/run'),"
+        " 'tmp': os.listdir('/tmp')}))\n"
+    )
+    env = {v: "unix:path=/run/user/1000/bus" for v in SESSION_VARS}
+    res = process.run(prefix + ["/usr/bin/python3", "-c", probe], env=env, timeout=30)
+    assert res.returncode == 0, res.stderr
+    seen = json.loads(res.stdout)
+    assert not set(seen["env"]) & set(SESSION_VARS)
+    assert seen["run"] == []
+    # 私有的 /tmp 只看得到通往這次暫存資料夾的那一層，主機的 /tmp（.X11-unix 等）看不到
+    allowed = set()
+    if tmp_path.resolve().is_relative_to("/tmp"):
+        allowed.add(tmp_path.resolve().relative_to("/tmp").parts[0])
+    assert set(seen["tmp"]) <= allowed
+    assert ".X11-unix" not in seen["tmp"]
 
 
 def test_sandbox_really_has_no_network(tmp_path: Path):
