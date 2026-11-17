@@ -197,3 +197,29 @@ def test_opencv_fallback_and_failure(tmp_path, monkeypatch):
     with pytest.raises(errors.QSError) as exc:
         _run([img])
     assert str(exc.value) == NOT_FOUND
+
+
+@pytest.mark.parametrize("kind", ["tool", "action"])
+def test_runner_reports_clipboard_text(tmp_path, kind):
+    """同原版：所有內容以換行連接放進剪貼簿，不含「# 檔名」標題；文字檔照樣產生。"""
+    from quickseemd.core.runner import JobSpec, run_spec
+
+    a = _save(_qr("第一個 QR"), tmp_path / "a.png")
+    b = _save(_qr("BBB"), tmp_path / "b.png")
+    result = run_spec(JobSpec(kind, "other.read-qr", [str(a), str(b)]))
+    assert result.error is None
+    assert result.clipboard == "第一個 QR\nBBB"
+    assert result.to_json()["clipboard"] == "第一個 QR\nBBB"
+    assert result.summary == "找到 2 個，已複製到剪貼簿"
+    [out] = result.outputs
+    assert out.read_text("utf-8") == "# a.png\n第一個 QR\n\n# b.png\nBBB\n"
+
+
+def test_runner_no_clipboard_when_nothing_found(tmp_path):
+    from quickseemd.core.runner import JobSpec, run_spec
+
+    img = _save(np.full((200, 200), 255, np.uint8), tmp_path / "white.png")
+    result = run_spec(JobSpec("tool", "other.read-qr", [str(img)]))
+    assert result.error == NOT_FOUND
+    assert result.clipboard is None
+    assert "clipboard" not in result.to_json()
