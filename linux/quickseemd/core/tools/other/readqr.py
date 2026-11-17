@@ -4,7 +4,8 @@
 - 解碼用 zbar（pyzbar），設成「不轉換」模式拿原始位元組，再自己判斷文字編碼
   （zbar 自己猜編碼時常把 UTF-8 中文誤當成 Shift-JIS）；zbar 找不到時再用 OpenCV 的 QR 偵測。
 - 每個檔案內去除重複；多個檔案時文字檔裡每段前面加「# 檔名」。
-- 工作程序不能持有剪貼簿：這裡只寫出文字檔，介面端讀出內容後用 clipboard_payload() 取得要複製的文字。
+- 工作程序不能持有剪貼簿：用 ctx.set_clipboard() 交出要拷貝的文字（結果的 clipboard），
+  由介面程序在完成後放進剪貼簿；clipboard_payload() 保留給只拿到文字檔的舊呼叫端。
 """
 
 from __future__ import annotations
@@ -59,7 +60,10 @@ def report_text(found: list[tuple[str, list[str]]], multiple: bool) -> str:
 
 
 def clipboard_payload(report: str) -> str:
-    """介面端用：從結果文字檔取出要放進剪貼簿的內容（去掉「# 檔名」標題與空行）。"""
+    """相容用：從結果文字檔取出要放進剪貼簿的內容（去掉「# 檔名」標題與空行）。
+
+    新的呼叫端請改用執行結果的 clipboard（內容與原版拷貝的完全相同）。
+    """
     lines = [ln for ln in report.splitlines() if ln and not ln.startswith("# ")]
     return "\n".join(lines)
 
@@ -213,13 +217,15 @@ def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:  # n
         sub = ctx.segment(i, len(files))
         sub.progress(0.1, f"掃描：{f.name}")
         found.append((f.name, scan_file(f, sub)))
-    count = sum(len(codes) for _, codes in found)
-    if count == 0:
+    payloads = [code for _, codes in found for code in codes]
+    if not payloads:
         raise errors.empty_content(NOT_FOUND)
+    # 同原版：所有內容以換行連接放進剪貼簿（不含「# 檔名」）；由介面程序在完成後拷貝
+    ctx.set_clipboard("\n".join(payloads))
     tmp = ctx.make_work_dir(ctx.output_directory(files[0])) / "qr.txt"
     with open(tmp, "xb") as out:
         out.write(report_text(found, len(files) > 1).encode("utf-8"))
-    ctx.progress(1, f"找到 {count} 個，已複製到剪貼簿")
+    ctx.progress(1, f"找到 {len(payloads)} 個，已複製到剪貼簿")
     return [ctx.deliver(tmp, ctx.output_name(files[0], "QR內容", "txt"), files[0])]
 
 
