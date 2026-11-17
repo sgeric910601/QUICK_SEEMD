@@ -438,39 +438,95 @@ def _link_key(member: tarfile.TarInfo) -> str:
     return "/".join(depth)
 
 
-def _member_cost(member: tarfile.TarInfo, sizes: dict[str, int]) -> int:
-    """會寫進磁碟的大小。連結也算目標的大小：檔案系統不支援連結（exFAT、FUSE…）時
-    tarfile 會改成複製一份。"""
-    if member.isreg():
-        return member.size
-    if member.islnk() or member.issym():
-        return sizes.get(_link_key(member), 0)
+MAX_LINK_HOPS = 40
+
+
+def _resolved_size(key: str, by_key: dict[str, tarfile.TarInfo]) -> int:
+    """順著連結找到最後的一般檔案，回傳它的大小（tarfile 不支援連結時會複製這份內容）。"""
+    for _hop in range(MAX_LINK_HOPS):
+        member = by_key.get(key)
+        if member is None:
+            return 0
+        if member.isreg():
+            return member.size
+        if not (member.islnk() or member.issym()):
+            return 0
+        key = _link_key(member)
     return 0
 
 
+def _member_cost(member: tarfile.TarInfo, by_key: dict[str, tarfile.TarInfo]) -> int:
+    """會寫進磁碟的大小。連結也算目標的大小：檔案系統不支援連結（exFAT、FUSE…）時
+    tarfile 會改成複製一份（硬連結找前面的項目，符號連結找整個壓縮檔）。"""
+    if member.isreg():
+        return member.size
+    if member.islnk() or member.issym():
+        return _resolved_size(_link_key(member), by_key)
+    return 0
+
+
+def _next_member(tf: tarfile.TarFile) -> tarfile.TarInfo | None:
+    try:
+        return tf.next()
+    except _READ_ERRORS as exc:
+        raise NeedExternal from exc
+
+
+def _register_member(member: tarfile.TarInfo, by_key: dict[str, tarfile.TarInfo]) -> None:
+    """記下項目名稱；重複的名稱（後面的會蓋掉前面的）與指向後面項目的硬連結一律拒絕。"""
+    if member.islnk() and _link_key(member) not in by_key:
+        raise UnsafeEntry(member.name)
+    key = "/".join(safe_parts(member.name))
+    if not key:
+        return
+    if key in by_key:
+        raise Conflict(member.name)
+    by_key[key] = member
+
+
 def _scan_tar(tf: tarfile.TarFile, budget: Budget) -> list[tuple[tarfile.TarInfo, int]]:
-    """逐一讀項目標頭並檢查；宣告大小一超過額度就立刻停（不必先解完整個壓縮串流）。"""
-    plan: list[tuple[tarfile.TarInfo, int]] = []
-    sizes: dict[str, int] = {}
+    """讀完全部項目標頭並檢查，再算每個項目的成本。
+
+    一般檔案的宣告大小一超過額度就立刻停（不必先解完整個壓縮串流）；
+    略過的 macOS 中繼資料也要登記，因為連結可能指向它。
+    """
+    by_key: dict[str, tarfile.TarInfo] = {}
+    kept: list[tarfile.TarInfo] = []
     declared = 0
-    while True:
-        try:
-            member = tf.next()
-        except _READ_ERRORS as exc:
-            raise NeedExternal from exc
-        if member is None:
-            break
+    while (member := _next_member(tf)) is not None:
         keep = _keep_tar_member(member)
-        cost = _member_cost(member, sizes)
-        # 略過的 macOS 中繼資料也記下大小：連結指向它而連結失敗時，tarfile 會複製它的內容
-        sizes["/".join(safe_parts(member.name))] = cost
+        _register_member(member, by_key)
         if not keep:
             continue
-        declared += cost
-        budget.check(extra_disk=declared, extra_content=declared)
-        plan.append((member, cost))
-    budget.plan(declared)
+        kept.append(member)
+        if member.isreg():
+            declared += member.size
+            budget.check(extra_disk=declared, extra_content=declared)
+    plan = [(m, _member_cost(m, by_key)) for m in kept]
+    budget.plan(sum(cost for _m, cost in plan))
     return plan
+
+
+def _written_bytes(member: tarfile.TarInfo, root: Path) -> int:
+    """實際寫進磁碟的大小（連結成功時是 0，連結失敗改成複製時是複本的大小）。"""
+    if member.isreg():
+        return member.size
+    if not (member.islnk() or member.issym()):
+        return 0
+    try:
+        st = os.lstat(root / member.name)
+    except OSError:
+        return 0
+    if not stat.S_ISREG(st.st_mode):
+        return 0  # 建成符號連結或資料夾，沒有寫資料
+    if member.islnk():
+        try:
+            target = os.lstat(root / member.linkname)
+        except OSError:
+            return st.st_size
+        if (target.st_dev, target.st_ino) == (st.st_dev, st.st_ino):
+            return 0  # 真的硬連結，和目標共用同一份資料
+    return st.st_size
 
 
 def _extract_member(tf: tarfile.TarFile, member: tarfile.TarInfo, root: Path) -> None:
@@ -492,10 +548,10 @@ def extract_tar(path: Path, root: Path, ctx: ToolContext, budget: Budget) -> Non
         raise NeedExternal from exc
     with tf:
         plan = _scan_tar(tf, budget)
-        for i, (member, cost) in enumerate(plan):
+        for i, (member, _cost) in enumerate(plan):
             ctx.check_cancelled()
             _extract_member(tf, member, root)
-            budget.charge(cost)
+            budget.charge(_written_bytes(member, root))
             ctx.progress((i + 1) / len(plan))
 
 
