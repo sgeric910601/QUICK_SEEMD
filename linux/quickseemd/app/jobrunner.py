@@ -1,4 +1,4 @@
-"""在主執行緒使用的工作程序包裝：WorkerJob 的回呼改由 GLib.idle_add 送回主迴圈。
+"""在主執行緒使用的工作程序包裝：WorkerJob 的回呼改由 mainloop.to_main 送回主迴圈。
 
 進度只往前（原版 max(old, new)），結束時回傳工作程序的結果 dict
 （成功有 outputs、失敗有 error、取消有 cancelled=True）。
@@ -10,10 +10,9 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from gi.repository import GLib
-
 from ..core import jobs
 from ..core.runner import JobSpec
+from .mainloop import to_main
 
 LOG = logging.getLogger(__name__)
 
@@ -55,10 +54,10 @@ class JobRunner:
 
     # 工作程序的讀取執行緒呼叫這兩個，轉回主執行緒
     def _progress_thread(self, fraction: float, message: str | None) -> None:
-        GLib.idle_add(self._progress_main, fraction, message)
+        to_main(self._progress_main, fraction, message)
 
     def _done_thread(self, result: dict[str, Any]) -> None:
-        GLib.idle_add(self._done_main, result)
+        to_main(self._done_main, result)
 
     def _progress_main(self, fraction: float, message: str | None) -> bool:
         if self.active:

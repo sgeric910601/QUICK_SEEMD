@@ -17,6 +17,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, GLib, GObject, Gtk  # noqa: E402
 
+from ..mainloop import to_main  # noqa: E402
 from ..thumbnails import render_pdf_page  # noqa: E402
 from ..widgets import clear, hbox, icon, label, secondary, vbox  # noqa: E402
 from . import ViewContext  # noqa: E402
@@ -67,14 +68,14 @@ class OrganizeView:
 
     def _load(self, path: Path, token: int) -> None:
         sizes = _read_pdf(path)
-        GLib.idle_add(self._loaded, token, sizes)
+        to_main(self._loaded, token, sizes)
         for i in range(len(sizes)):
             if token != self._token:
                 return
             data = render_pdf_page(path, i, THUMB_SIDE)
             if data:
                 surf = cairo.ImageSurface.create_from_png(io.BytesIO(data))
-                GLib.idle_add(self._thumb_ready, token, i, surf)
+                to_main(self._thumb_ready, token, i, surf)
 
     def _loaded(self, token: int, sizes: list[tuple[float, float]]) -> bool:
         if token == self._token:
@@ -308,7 +309,7 @@ class OrganizeView:
             ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
             shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
             self.model.tap(page.uid, ctrl=ctrl, shift=shift)
-            GLib.idle_add(lambda: self._refresh() and False)
+            to_main(self._refresh)
 
         click.connect("released", pressed)
         area.add_controller(click)
@@ -325,7 +326,7 @@ class OrganizeView:
         if not text.startswith(DRAG_PREFIX) or not text[len(DRAG_PREFIX) :].isdigit():
             return False
         self.model.move(int(text[len(DRAG_PREFIX) :]), target)
-        GLib.idle_add(lambda: self._changed() and False)
+        to_main(self._changed)
         return True
 
     # ------------------------------------------------------------ 繪製

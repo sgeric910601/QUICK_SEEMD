@@ -110,6 +110,13 @@ class OptionsState:
             _safe(lambda: opt.current_choices(self.values, self.info), opt.choices, opt.key)
         )
 
+    def range(self, opt: Option) -> tuple[float, float]:
+        """滑桿／數字目前的範圍（工具可以依檔案資訊動態決定）。"""
+        raw = _safe(lambda: opt.current_range(self.values, self.info), None, opt.key)
+        if raw is None:
+            return number_range(opt)
+        return number_range(opt, raw)
+
     def note(self, opt: Option) -> tuple[str, bool] | None:
         """選項下方的說明（文字, 是否警告）；NOTE 種類就是框裡的內容。"""
         dynamic = None
@@ -141,9 +148,12 @@ def digits_for(opt: Option) -> int:
     return len(text.split(".")[1]) if "." in text else 0
 
 
-def number_range(opt: Option) -> tuple[float, float]:
-    lo = float(opt.minimum) if opt.minimum is not None else NUMBER_DEFAULT_RANGE[0]
-    hi = float(opt.maximum) if opt.maximum is not None else NUMBER_DEFAULT_RANGE[1]
+def number_range(
+    opt: Option, current: tuple[float | None, float | None] | None = None
+) -> tuple[float, float]:
+    lo_raw, hi_raw = current if current is not None else (opt.minimum, opt.maximum)
+    lo = float(lo_raw) if lo_raw is not None else NUMBER_DEFAULT_RANGE[0]
+    hi = float(hi_raw) if hi_raw is not None else NUMBER_DEFAULT_RANGE[1]
     return lo, max(lo, hi)
 
 
@@ -151,9 +161,9 @@ def _is_int_option(opt: Option) -> bool:
     return float(opt.step or 1).is_integer() and not isinstance(opt.default, float)
 
 
-def coerce_number(opt: Option, raw: float) -> int | float:
+def coerce_number(opt: Option, raw: float, rng: tuple[float, float] | None = None) -> int | float:
     """把控制項的數值對齊到 step、限制在範圍內；整數選項回傳 int。"""
-    lo, hi = number_range(opt)
+    lo, hi = rng if rng is not None else number_range(opt)
     step = float(opt.step or 1)
     value = min(max(float(raw), lo), hi)
     value = lo + math.floor((value - lo) / step + 0.5) * step

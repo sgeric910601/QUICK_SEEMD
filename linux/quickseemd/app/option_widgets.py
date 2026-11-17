@@ -27,18 +27,42 @@ LOG = logging.getLogger(__name__)
 TIME_HINT = "時間格式不正確，例如 1:05.5 或 65"
 
 
+def apply_range(adj: Gtk.Adjustment, rng: tuple[float, float]) -> None:
+    """動態範圍：範圍變了才更新（避免拖曳中跳動）。"""
+    lo, hi = rng
+    if adj.get_lower() != lo:
+        adj.set_lower(lo)
+    if adj.get_upper() != hi:
+        adj.set_upper(hi)
+
+
+def with_suggestions(field: Gtk.Widget, opt: Option, emit) -> Gtk.Widget:  # noqa: ANN001
+    """欄位旁的快速填入按鈕（例如 10／25／50 MB），按下就填入 choice.value。"""
+    if not opt.suggestions:
+        return field
+    row = hbox(6, field)
+    for ch in opt.suggestions:
+        btn = Gtk.Button(label=ch.title, tooltip_text=ch.subtitle)
+        btn.add_css_class("qs-chip")
+        btn.connect("clicked", lambda _b, v=ch.value: emit(v))
+        row.append(btn)
+    return row
+
+
 class Control:
     """一個選項的控制項：標題（有的話）＋本體＋固定說明＋動態說明。"""
 
     show_title = True
 
-    def __init__(self, opt: Option, state: om.OptionsState) -> None:
+    def __init__(
+        self, opt: Option, state: om.OptionsState, section_title: str | None = None
+    ) -> None:
         self.opt = opt
         self.state = state
         self._syncing = False
         self._sig: tuple = ()
         self.root = vbox(6)
-        if self.show_title and opt.label:
+        if self.show_title and opt.label and opt.label != section_title:
             self.root.append(label(opt.label, "qs-semibold"))
         self.body = self.build()
         self.root.append(self.body)
@@ -253,11 +277,12 @@ class SliderControl(Control):
         return vbox(2, head, self._scale)
 
     def _changed(self, scale: Gtk.Scale) -> None:
-        v = om.coerce_number(self.opt, scale.get_value())
+        v = om.coerce_number(self.opt, scale.get_value(), self.state.range(self.opt))
         self._value_label.set_label(om.slider_text(self.opt, v))
         self.emit(v)
 
     def sync(self) -> None:
+        apply_range(self._scale.get_adjustment(), self.state.range(self.opt))
         v = self.value if self.value is not None else self.opt.minimum or 0
         if abs(self._scale.get_value() - float(v)) > 1e-9:
             self._scale.set_value(float(v))
@@ -272,12 +297,14 @@ class NumberControl(Control):
         self._spin = Gtk.SpinButton(adjustment=adj, digits=om.digits_for(self.opt))
         self._spin.set_numeric(True)
         self._spin.set_halign(Gtk.Align.START)
-        self._spin.connect(
-            "value-changed", lambda s: self.emit(om.coerce_number(self.opt, s.get_value()))
-        )
-        return self._spin
+        self._spin.connect("value-changed", self._changed)
+        return with_suggestions(self._spin, self.opt, self.emit)
+
+    def _changed(self, spin: Gtk.SpinButton) -> None:
+        self.emit(om.coerce_number(self.opt, spin.get_value(), self.state.range(self.opt)))
 
     def sync(self) -> None:
+        apply_range(self._spin.get_adjustment(), self.state.range(self.opt))
         v = self.value
         if v is not None and abs(self._spin.get_value() - float(v)) > 1e-9:
             self._spin.set_value(float(v))
@@ -326,7 +353,9 @@ class TextControl(Control):
         else:
             self._entry = Gtk.Entry(placeholder_text=self.placeholder())
         self._entry.connect("changed", self._changed)
-        return self._entry
+        if self.password:
+            return self._entry
+        return with_suggestions(self._entry, self.opt, self.emit)
 
     def _changed(self, entry: Gtk.Editable) -> None:
         self.emit(entry.get_text())
@@ -517,5 +546,5 @@ CONTROLS: dict[Kind, type[Control]] = {
 }
 
 
-def make_control(opt: Option, state: om.OptionsState) -> Control:
-    return CONTROLS[opt.kind](opt, state)
+def make_control(opt: Option, state: om.OptionsState, section_title: str | None = None) -> Control:
+    return CONTROLS[opt.kind](opt, state, section_title)

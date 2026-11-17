@@ -1,4 +1,4 @@
-"""桌面動作：在資料夾中顯示、用預設程式開啟、QR 內容放進剪貼簿的文字。
+"""桌面動作：在資料夾中顯示、用預設程式開啟。
 
 - 「在資料夾中顯示」走 D-Bus org.freedesktop.FileManager1.ShowItems（這台導向 Nemo）；
   失敗時改成打開所在的資料夾。
@@ -18,7 +18,6 @@ LOG = logging.getLogger(__name__)
 
 FILEMANAGER_NAME = "org.freedesktop.FileManager1"
 FILEMANAGER_PATH = "/org/freedesktop/FileManager1"
-READ_QR_TOOLS = frozenset({"other.read-qr"})
 DBUS_TIMEOUT_MS = 5000
 TEST_LOG: list[tuple[str, list[str]]] = []
 
@@ -90,17 +89,3 @@ def open_paths(paths: Sequence[Path]) -> None:
         return
     for p in items:
         _launch_uri(p.as_uri())
-
-
-def qr_clipboard_text(tool_id: str, outputs: Sequence[Path]) -> str | None:
-    """「讀取 QR Code」完成後要放進剪貼簿的內容（輸出檔裡不是「# 」開頭的行）。"""
-    if tool_id not in READ_QR_TOOLS or not outputs:
-        return None
-    try:
-        text = Path(outputs[0]).read_text("utf-8", errors="replace")
-    except OSError:
-        LOG.warning("讀不到 QR 結果檔：%s", outputs[0])
-        return None
-    lines = [ln for ln in text.splitlines() if not ln.startswith("# ")]
-    payload = "\n".join(lines).strip("\n")
-    return payload or None

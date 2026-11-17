@@ -14,9 +14,11 @@ import cairo
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
+from ..mainloop import to_main  # noqa: E402
 from ..options_model import format_time, parse_time  # noqa: E402
+from ..thumbnails import video_frame  # noqa: E402
 from ..widgets import hbox, icon, label, secondary, vbox  # noqa: E402
 from . import ViewContext  # noqa: E402
 from . import media_probe as mp  # noqa: E402
@@ -30,6 +32,7 @@ TIME_HINT = "時間格式不正確，例如 1:05.5 或 65"
 
 class TrimView:
     is_audio = False
+    hides = ("start", "end")  # 單一檔案時用自己的時間欄位（原版也是）
 
     def __init__(self, ctx: ViewContext) -> None:
         self.ctx = ctx
@@ -41,6 +44,7 @@ class TrimView:
         self.stream: Gtk.MediaFile | None = None
         self._range_end: float | None = None
         self._drag: str | None = None
+        self._scrub = 0.0
         self._token = 0
         self._syncing = False
         self.widget = self._build_widget()
@@ -58,21 +62,23 @@ class TrimView:
         self.info, self.frames, self.wave = None, [], []
         self.model = tm.TrimModel()
         self.name.set_label(path.name)
-        self._set_stream(path)
+        self._drop_stream()
         self._status("loading")
         threading.Thread(target=self._load, args=(path, self._token), daemon=True).start()
 
     def _load(self, path: Path, token: int) -> None:
         info = mp.probe(path)
-        GLib.idle_add(self._probed, token, info)
+        to_main(self._probed, token, info)
         if info is None:
             return
         if self.is_audio or not info.has_video:
             wave = mp.peaks(path)
-            GLib.idle_add(self._media_ready, token, [], wave)
+            to_main(self._media_ready, token, [], wave)
         else:
+            poster = video_frame(path, min(1.0, info.duration / 2), 360)
+            to_main(self._poster_ready, token, poster)
             frames = [mp.png_surface(d) for d in mp.strip(path, info.duration)]
-            GLib.idle_add(self._media_ready, token, frames, [])
+            to_main(self._media_ready, token, frames, [])
 
     def _probed(self, token: int, info: mp.MediaInfo | None) -> bool:
         if token != self._token:
@@ -93,12 +99,32 @@ class TrimView:
             self.bar.queue_draw()
         return False
 
-    def _set_stream(self, path: Path) -> None:
+    def _poster_ready(self, token: int, data: bytes | None) -> bool:
+        if token == self._token and data and self.poster is not None:
+            try:
+                self.poster.set_paintable(Gdk.Texture.new_from_bytes(GLib.Bytes.new(data)))
+            except GLib.Error:
+                LOG.info("封面畫面讀取失敗")
+        return False
+
+    def _drop_stream(self) -> None:
+        """換檔或離開時停止播放；播放管線等到按下播放才建立。"""
         if self.stream is not None:
             self.stream.pause()
-        self.stream = Gtk.MediaFile.new_for_filename(str(path))
+        self.stream = None
+        self._scrub = 0.0
         if self.video is not None:
-            self.video.set_media_stream(self.stream)
+            self.video.set_media_stream(None)
+            self.preview_stack.set_visible_child_name("poster")
+            self.poster.set_paintable(None)
+
+    def _ensure_stream(self) -> Gtk.MediaFile | None:
+        if self.stream is None and self.path is not None:
+            self.stream = Gtk.MediaFile.new_for_filename(str(self.path))
+            if self.video is not None:
+                self.video.set_media_stream(self.stream)
+                self.preview_stack.set_visible_child_name("video")
+        return self.stream
 
     # ------------------------------------------------------------ 介面
 
@@ -134,6 +160,7 @@ class TrimView:
 
     def _preview(self) -> Gtk.Widget:
         self.video: Gtk.Video | None = None
+        self.poster: Gtk.Picture | None = None
         if self.is_audio:
             self.big_time = label("0:00.00", "qs-pct", xalign=0.5)
             box = vbox(6, icon("audio-x-generic-symbolic", 34, "qs-tinted"), self.big_time)
@@ -144,9 +171,13 @@ class TrimView:
             return box
         self.big_time = None
         self.video = Gtk.Video(autoplay=False, loop=False)
-        self.video.set_size_request(-1, 240)
-        self.video.add_css_class("qs-video-box")
-        return self.video
+        self.poster = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN)
+        self.preview_stack = Gtk.Stack()
+        self.preview_stack.add_named(self.poster, "poster")
+        self.preview_stack.add_named(self.video, "video")
+        self.preview_stack.set_size_request(-1, 240)
+        self.preview_stack.add_css_class("qs-video-box")
+        return self.preview_stack
 
     def _transport(self) -> Gtk.Widget:
         self.play = Gtk.Button(
@@ -241,7 +272,9 @@ class TrimView:
         self._emit()
 
     def _playhead(self) -> float:
-        return (self.stream.get_timestamp() / 1_000_000) if self.stream is not None else 0.0
+        if self.stream is None:
+            return self._scrub
+        return self.stream.get_timestamp() / 1_000_000
 
     def _to_playhead(self, which: str) -> None:
         if self.model.duration is None:
@@ -252,29 +285,31 @@ class TrimView:
     # ------------------------------------------------------------ 播放
 
     def _toggle_play(self) -> None:
-        if self.stream is None:
+        stream = self._ensure_stream()
+        if stream is None:
             return
         self._range_end = None
-        if self.stream.get_playing():
-            self.stream.pause()
+        if stream.get_playing():
+            stream.pause()
         else:
-            self.stream.play()
+            stream.play()
 
     def _play_range(self) -> None:
-        if self.stream is None or self.model.duration is None:
+        stream = self._ensure_stream()
+        if stream is None or self.model.duration is None:
             return
-        self.stream.seek(int(self.model.start * 1_000_000))
+        stream.seek(int(self.model.start * 1_000_000))
         self._range_end = self.model.effective_end
-        self.stream.play()
+        stream.play()
 
     def _tick(self) -> bool:
-        if self.stream is None:
-            return True
         now = self._playhead()
-        if self._range_end is not None and now >= self._range_end and self.stream.get_playing():
-            self.stream.pause()
+        stream = self.stream
+        if self._range_end is not None and stream is not None and now >= self._range_end:
+            if stream.get_playing():
+                stream.pause()
             self._range_end = None
-        playing = self.stream.get_playing()
+        playing = bool(stream is not None and stream.get_playing())
         self.play.set_icon_name(
             "media-playback-pause-symbolic" if playing else "media-playback-start-symbolic"
         )
@@ -316,9 +351,12 @@ class TrimView:
             self.model.set_start(t)
         elif self._drag == "end":
             self.model.set_end(t)
-        elif self.stream is not None:
-            self.stream.pause()
-            self.stream.seek(int(t * 1_000_000))
+        else:
+            self._scrub = t
+            stream = self._ensure_stream()
+            if stream is not None:
+                stream.pause()
+                stream.seek(int(t * 1_000_000))
         self._refresh_texts()
 
     def _bar_end(self) -> None:
@@ -348,7 +386,8 @@ class TrimView:
 
     def _draw_wave(self, cr: cairo.Context, w: int, h: int) -> None:
         step = (w - 16) / len(self.wave)
-        cr.set_source_rgba(0.55, 0.35, 0.85, 0.8)
+        r, g, b = self.ctx.tool.tint_rgb
+        cr.set_source_rgba(r, g, b, 0.75)
         for i, p in enumerate(self.wave):
             bar_h = max(2.0, p * (h - 10))
             cr.rectangle(8 + i * step, (h - bar_h) / 2, max(step - 1, 1), bar_h)
@@ -362,7 +401,7 @@ class TrimView:
         cr.rectangle(8, 0, xs - 8, h)
         cr.rectangle(xe, 0, w - 8 - xe, h)
         cr.fill()
-        cr.set_source_rgb(1.0, 0.75, 0.1)
+        cr.set_source_rgb(*self.ctx.tool.tint_rgb)
         cr.set_line_width(3)
         cr.rectangle(xs, 1.5, xe - xs, h - 3)
         cr.stroke()
@@ -388,8 +427,7 @@ class TrimView:
         if self._timer:
             GLib.source_remove(self._timer)
             self._timer = 0
-        if self.stream is not None:
-            self.stream.pause()
+        self._drop_stream()
         self._unsub()
 
 

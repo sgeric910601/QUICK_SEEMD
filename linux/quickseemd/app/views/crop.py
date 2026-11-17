@@ -18,6 +18,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
 
 from .. import options_model  # noqa: E402
+from ..mainloop import to_main  # noqa: E402
 from ..widgets import hbox, icon, label, secondary, vbox  # noqa: E402
 from . import ViewContext  # noqa: E402
 from . import crop_model as cm  # noqa: E402
@@ -71,7 +72,7 @@ class CropView:
 
     def _worker(self, path: Path, token: int) -> None:
         pb, w, h = _load(path)
-        GLib.idle_add(self._loaded, token, pb, w, h)
+        to_main(self._loaded, token, pb, w, h)
 
     def _loaded(self, token: int, pb: GdkPixbuf.Pixbuf | None, w: int, h: int) -> bool:
         if token != self._token:

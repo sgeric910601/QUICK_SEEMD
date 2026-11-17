@@ -15,6 +15,7 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 from ..core import filetypes, icons  # noqa: E402
 from ..core.result import format_size, size_of  # noqa: E402
 from . import css, thumbnails  # noqa: E402
+from .mainloop import to_main  # noqa: E402
 
 LOG = logging.getLogger(__name__)
 RGB = tuple[float, float, float]
@@ -317,4 +318,4 @@ def _add_type(flt: Gtk.FileFilter, t: str) -> None:
 
 def idle(func: Callable[[], None]) -> None:
     """在主執行緒稍後執行一次。"""
-    GLib.idle_add(lambda: func() and False)
+    to_main(func)

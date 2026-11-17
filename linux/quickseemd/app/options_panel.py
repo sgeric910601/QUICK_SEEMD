@@ -30,7 +30,7 @@ class _Section:
             self.box.append(head)
         current: tuple[Gtk.ListBox, list[ToggleControl]] | None = None
         for opt in spec.options:
-            ctl = make_control(opt, state)
+            ctl = make_control(opt, state, spec.title)
             self.controls.append(ctl)
             if opt.kind is Kind.TOGGLE and isinstance(ctl, ToggleControl):
                 if current is None:
@@ -45,9 +45,13 @@ class _Section:
             current = None
             self.box.append(ctl.root)
 
-    def refresh(self) -> bool:
+    def refresh(self, hidden: frozenset[str] = frozenset()) -> bool:
         for ctl in self.controls:
             ctl.refresh()
+            if ctl.opt.key in hidden:
+                ctl.root.set_visible(False)
+                if isinstance(ctl, ToggleControl):
+                    ctl.row.set_visible(False)
         for lb, toggles in self.lists:
             lb.set_visible(any(t.root.get_visible() for t in toggles))
         shown = any(c.root.get_visible() for c in self.controls)
@@ -61,6 +65,7 @@ class OptionsPanel(Gtk.Box):
     def __init__(self, state: om.OptionsState) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=20)
         self.state = state
+        self.hidden: frozenset[str] = frozenset()
         self.sections = [_Section(spec, state) for spec in om.group_options(state.tool.options)]
         for sec in self.sections:
             self.append(sec.box)
@@ -70,8 +75,13 @@ class OptionsPanel(Gtk.Box):
     def refresh(self) -> None:
         any_shown = False
         for sec in self.sections:
-            any_shown = sec.refresh() or any_shown
+            any_shown = sec.refresh(self.hidden) or any_shown
         self.set_visible(any_shown)
+
+    def set_hidden(self, keys: frozenset[str]) -> None:
+        """自訂畫面已經提供的選項（例如剪輯畫面自己的開始／結束欄位）不再重複顯示。"""
+        self.hidden = frozenset(keys)
+        self.refresh()
 
     def control(self, key: str) -> Control | None:
         for sec in self.sections:

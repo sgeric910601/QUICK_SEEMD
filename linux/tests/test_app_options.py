@@ -185,3 +185,27 @@ def test_parse_ratio():
     assert om.parse_ratio("r3x2", None) == 1.5
     assert om.parse_ratio("3/4", None) == 0.75
     assert om.parse_ratio(0, None) is None
+
+
+def test_dynamic_range_and_suggestions():
+    from quickseemd.core.model import OTHER, ToolDefinition
+
+    opt = Option(
+        "start",
+        Kind.SLIDER,
+        default=0.0,
+        minimum=0,
+        maximum=10,
+        step=0.5,
+        dynamic_range=lambda v, i: (0, i.get("duration", 10)),
+    )
+    bad = Option("b", Kind.NUMBER, default=1, dynamic_range=lambda v, i: 1 / 0)
+    tool = ToolDefinition(
+        "test.r", OTHER, "r", "r", "questionmark", lambda f, v, c: [], options=(opt, bad)
+    )
+    st = om.OptionsState(tool)
+    assert st.range(opt) == (0.0, 10.0)
+    st.set_info({"duration": 4.0})
+    assert st.range(opt) == (0.0, 4.0)
+    assert om.coerce_number(opt, 9.0, st.range(opt)) == 4.0
+    assert st.range(bad) == om.NUMBER_DEFAULT_RANGE

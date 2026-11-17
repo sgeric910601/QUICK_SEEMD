@@ -101,18 +101,6 @@ def test_window_size_roundtrip():
 # ---------------------------------------------------------------- QR 與桌面動作
 
 
-def test_qr_clipboard_text(tmp_path):
-    out = tmp_path / "圖-QR內容.txt"
-    out.write_text("# 來源：圖.png\n# 找到 2 個\nhttps://example.com\n第二個內容\n\n", "utf-8")
-    assert desktop.qr_clipboard_text("other.read-qr", [out]) == "https://example.com\n第二個內容"
-    assert desktop.qr_clipboard_text("pdf.merge", [out]) is None
-    assert desktop.qr_clipboard_text("other.read-qr", []) is None
-    only_comments = tmp_path / "c.txt"
-    only_comments.write_text("# 沒有找到\n", "utf-8")
-    assert desktop.qr_clipboard_text("other.read-qr", [only_comments]) is None
-    assert desktop.qr_clipboard_text("other.read-qr", [tmp_path / "missing.txt"]) is None
-
-
 def test_desktop_actions_are_recorded_under_test_guard(tmp_path):
     f = tmp_path / "x.txt"
     f.write_text("1")

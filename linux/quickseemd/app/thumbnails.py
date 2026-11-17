@@ -19,6 +19,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import GdkPixbuf, Gio, GLib  # noqa: E402
 
 from ..core import backends, filetypes, naming, process  # noqa: E402
+from .mainloop import to_main  # noqa: E402
 
 LOG = logging.getLogger(__name__)
 CACHE_LIMIT = 400
@@ -161,7 +162,7 @@ class ThumbnailLoader:
         with self._lock:
             if key in self._cache:
                 hit = self._cache[key]
-                GLib.idle_add(lambda: callback(hit) and False)
+                to_main(callback, hit)
                 return
         self._pool.submit(self._work, Path(path), w, h, key, callback)
 
@@ -175,7 +176,7 @@ class ThumbnailLoader:
             if len(self._cache) > CACHE_LIMIT:
                 self._cache.clear()
             self._cache[key] = pb
-        GLib.idle_add(lambda: callback(pb) and False)
+        to_main(callback, pb)
 
 
 _LOADER: ThumbnailLoader | None = None

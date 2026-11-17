@@ -19,7 +19,8 @@ from ..core import settings  # noqa: E402
 from ..core.model import ToolDefinition  # noqa: E402
 from ..core.result import summary_text  # noqa: E402
 from ..core.runner import JobSpec  # noqa: E402
-from . import css, desktop, routing, views  # noqa: E402
+from . import css, routing, views  # noqa: E402
+from .mainloop import to_main  # noqa: E402
 from .files_area import FilesArea  # noqa: E402
 from .jobrunner import JobRunner  # noqa: E402
 from .options_model import OptionsState  # noqa: E402
@@ -271,6 +272,7 @@ class ToolPage(Gtk.Box):
             self.custom = None
             self.files_area.set_custom(None)
             self._set_custom_panel(None)
+            self.panel.set_hidden(frozenset())
         if want and self.custom is None:
             ctx = views.ViewContext(
                 self.tool, self.options, lambda: self.set_files([]), self._refresh_footer
@@ -279,6 +281,7 @@ class ToolPage(Gtk.Box):
             if self.custom is not None:
                 self.files_area.set_custom(self.custom.widget)
                 self._set_custom_panel(self.custom.panel)
+                self.panel.set_hidden(frozenset(getattr(self.custom, "hides", ())))
         if self.custom is not None:
             self.custom.set_file(self.files[0])
 
@@ -307,7 +310,7 @@ class ToolPage(Gtk.Box):
         except Exception:  # noqa: BLE001 — 讀不到資訊時選項照常可用
             LOG.exception("讀取檔案資訊失敗")
             info = {}
-        GLib.idle_add(self._inspect_done, gen, info)
+        to_main(self._inspect_done, gen, info)
 
     def _inspect_done(self, gen: int, info: dict[str, Any]) -> bool:
         if gen == self._gen:
@@ -380,7 +383,7 @@ class ToolPage(Gtk.Box):
             )
             return
         outputs = [Path(p) for p in result.get("outputs") or []]
-        self._copy_qr(outputs)
+        self._copy_clipboard(result.get("clipboard"))
         summary = summary_text(result.get("summary"), self.files)
         page = ResultPage(
             self.tool,
@@ -393,10 +396,10 @@ class ToolPage(Gtk.Box):
         )
         self._show("result", page)
 
-    def _copy_qr(self, outputs: list[Path]) -> None:
-        text = desktop.qr_clipboard_text(self.tool.id, outputs)
+    def _copy_clipboard(self, text: object) -> None:
+        """工作程序交回要拷貝的文字（例如讀取 QR Code 的內容）。"""
         display = Gdk.Display.get_default()
-        if text and display is not None:
+        if isinstance(text, str) and text and display is not None:
             display.get_clipboard().set(text)
 
     def _show(self, name: str, widget: Gtk.Widget) -> None:
