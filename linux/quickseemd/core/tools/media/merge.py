@@ -95,7 +95,7 @@ def _merge_args(
     audio_rate = aac_sample_rate(max(rates)) if rates else None
     args: list[str] = []
     for f in files:
-        args += ["-i", str(Path(f).absolute())]
+        args += engine.input_args(Path(f))
     args += ["-filter_complex", merge_graph(infos, size, fps[1], audio_rate), "-map", "[v]"]
     if audio_rate is not None:
         args += ["-map", "[a]"]

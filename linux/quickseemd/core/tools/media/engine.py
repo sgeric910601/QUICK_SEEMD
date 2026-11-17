@@ -18,7 +18,7 @@ from ... import backends, errors, naming
 from ...model import ToolContext, per_file
 from ...result import format_size, size_of
 from .bitrate import aac_bitrate, aac_matching, aac_sample_rate, preserving
-from .probe import MediaInfo
+from .probe import PROTOCOL_WHITELIST, MediaInfo
 
 log = logging.getLogger(__name__)
 
@@ -131,7 +131,8 @@ def try_ffmpeg(ctx: ToolContext, args: Sequence[str], out: Path, **kw: Any) -> b
 
 
 def input_args(path: Path, *, start: float | None = None) -> list[str]:
-    out: list[str] = []
+    """一個輸入檔的參數（白名單、定位、絕對路徑）；所有 -i 都要經過這裡。"""
+    out: list[str] = list(PROTOCOL_WHITELIST)
     if start is not None and start > 0:
         out += ["-ss", f"{start:.6f}"]
     return out + ["-i", str(Path(path).absolute())]

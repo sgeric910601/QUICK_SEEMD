@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from dataclasses import asdict, dataclass, replace
@@ -13,7 +14,9 @@ from ... import backends, errors, process
 from ...result import format_size
 from . import timefmt
 
-PROBE_TIMEOUT = 60.0
+PROBE_TIMEOUT = 60.0  # 讀資訊、找關鍵影格的時間上限（惡意檔案不能讓選項畫面一直等）
+# 只准讀本機檔案：播放清單（HLS）或串接腳本偽裝成影片時，也不能連到網路（engine 也用這組）
+PROTOCOL_WHITELIST: tuple[str, ...] = ("-protocol_whitelist", "file,pipe")
 # 超過這個大小就不在選項畫面掃描全部關鍵影格（要讀完整個檔案）
 KEYFRAME_SCAN_LIMIT = 300 * 1000 * 1000
 # 找「某個時間點以前的關鍵影格」時，先往前看這麼多秒
@@ -21,6 +24,8 @@ KEYFRAME_WINDOW = 20.0
 
 # ffprobe 的比例寫法：「30000/1001」、「4:3」或整數
 _RATIONAL = re.compile(r"([0-9]{1,10})(?:[/:]([0-9]{1,10}))?")
+
+log = logging.getLogger(__name__)
 
 _VIDEO_TITLES = {
     "h264": "H.264",
@@ -276,9 +281,15 @@ def _run_ffprobe(path: Path, cancel: threading.Event | None) -> dict[str, Any]:
         "json",
         "-show_format",
         "-show_streams",
+        *PROTOCOL_WHITELIST,
         str(path),
     ]
-    res = process.run(args, cancel=cancel, timeout=PROBE_TIMEOUT)
+    try:
+        res = process.run(args, cancel=cancel, timeout=PROBE_TIMEOUT)
+    except errors.Cancelled:
+        raise
+    except errors.QSError as exc:  # 逾時：當成讀不懂（子程序已結束）
+        raise unreadable_media(path.name) from exc
     if res.returncode != 0:
         raise unreadable_media(path.name)
     try:
@@ -325,8 +336,15 @@ def keyframes(
     args += ["-select_streams", str(stream) if stream is not None else "v:0"]
     if interval is not None:
         args += ["-read_intervals", f"{max(0.0, interval[0]):.3f}%{interval[1]:.3f}"]
-    args += ["-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", str(Path(path).absolute())]
-    res = process.run(args, cancel=cancel, timeout=PROBE_TIMEOUT * 5)
+    args += ["-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", *PROTOCOL_WHITELIST]
+    args.append(str(Path(path).absolute()))
+    try:
+        res = process.run(args, cancel=cancel, timeout=PROBE_TIMEOUT)
+    except errors.Cancelled:
+        raise
+    except errors.QSError as exc:  # 逾時：不對齊關鍵影格（呼叫端改用原時間）
+        log.info("讀取關鍵影格失敗：%s", exc)
+        return []
     if res.returncode != 0:
         return []
     times: set[float] = set()
