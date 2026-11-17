@@ -4,6 +4,7 @@
   避免 playbin 自己另外開視窗。
 - 下方控制列：播放／暫停按鈕、可拖曳的進度條、時間。
 - 顯示出來後自動播放；播完停在最後，再按播放從頭開始。
+- 不連網：會自己抓網路片段的解封裝元件先停用，網路來源元件一出現就擋下（見 mediaguard）。
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gio, GLib, Gst, Gtk  # noqa: E402
 
 from ..core import errors  # noqa: E402
+from . import mediaguard  # noqa: E402
 from .formatting import format_duration  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -32,8 +34,10 @@ SizeCallback = Callable[[int, int], None]
 
 
 def _ensure_gst() -> None:
+    """初始化 GStreamer，並在建立任何播放器之前停用會自己連網的解封裝元件。"""
     if not Gst.is_initialized():
         Gst.init(None)
+    mediaguard.harden_registry()
 
 
 def _make(factory: str) -> Gst.Element:
@@ -66,7 +70,10 @@ class MediaView(Gtk.Box):
         self._sized = False
         self._ended = False
         self._seeking = False
+        self._alive = True
+        self._failed = False
         self._playbin = _make("playbin")
+        mediaguard.PipelineGuard(self._refused_from_stream).attach(self._playbin)
         self._playbin.set_property("uri", Gio.File.new_for_path(str(path)).get_uri())
         self.pack_start(self._picture(video, path), True, True, 0)
         self.pack_start(self._controls(), False, False, 0)
@@ -178,7 +185,19 @@ class MediaView(Gtk.Box):
         if size is not None and self._on_natural_size is not None:
             self._on_natural_size(*size)
 
+    def _refused_from_stream(self, _name: str) -> None:
+        """防護在串流執行緒擋下會連網的元件：回到主執行緒停止播放並顯示原因。"""
+        GLib.idle_add(self._refused)
+
+    def _refused(self) -> bool:
+        if self._alive:
+            self._show_error(mediaguard.REFUSED_TEXT)
+        return GLib.SOURCE_REMOVE
+
     def _show_error(self, message: str) -> None:
+        if self._failed:  # 只顯示第一個原因（例如擋下連網後，接著的播放錯誤不用再顯示）
+            return
+        self._failed = True
         log.warning("無法播放：%s", message)
         self._playbin.set_state(Gst.State.NULL)
         for child in self.get_children():
@@ -188,6 +207,7 @@ class MediaView(Gtk.Box):
         label.show()
 
     def _on_destroy(self, _widget: Gtk.Widget) -> None:
+        self._alive = False
         if self._timer:
             GLib.source_remove(self._timer)
             self._timer = 0
