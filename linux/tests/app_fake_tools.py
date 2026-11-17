@@ -55,6 +55,13 @@ def _prefill(files: list[Path], info: dict) -> Values:  # noqa: ARG001
     return {"width": info["pixel"][0]}
 
 
+def _adjust(values: Values, changed: str, info: dict) -> Values:  # noqa: ARG001
+    """換成 PNG 時把品質拉到最高（測試連動調整）。"""
+    if changed == "format" and values.get("format") == "png":
+        return {"quality": 100, "nope": 1}
+    return {}
+
+
 def _validate(files: list[Path], values: Values, info: dict) -> str | None:  # noqa: ARG001
     if values.get("text") == "壞":
         return "文字不可以是「壞」"
@@ -129,7 +136,9 @@ ALL_KINDS_OPTIONS: tuple[Option, ...] = (
         label="顏色",
         default="#e53935",
         custom_key="custom_color",
+        custom_default="#3366cc",
         choices=(
+            Choice("transparent", "透明"),
             Choice("#e53935", "紅"),
             Choice("#1e88e5", "藍"),
             Choice("#000000", "黑"),
@@ -197,6 +206,7 @@ TOOLS: list[ToolDefinition] = [
         inspect=_inspect_pages,
         prefill=_prefill,
         validate=_validate,
+        adjust=_adjust,
         files_note=lambda f, v, i: "第一個檔案很大" if len(f) > 3 else None,
     ),
     ToolDefinition(
@@ -287,9 +297,9 @@ TOOLS: list[ToolDefinition] = [
                 group_icon="aspectratio",
                 choices=(
                     Choice("free", "自由", "自由拖曳"),
-                    Choice("1:1", "1:1", "大頭貼、IG 貼文"),
-                    Choice("16:9", "16:9", "影片、簡報、桌布"),
-                    Choice("a4-portrait", "A4 直", "列印 A4 紙張"),
+                    Choice("square", "1:1", "大頭貼、IG 貼文"),
+                    Choice("r16x9", "16:9", "影片、簡報、桌布"),
+                    Choice("a4Portrait", "A4 直", "列印 A4 紙張"),
                 ),
             ),
             Option("crop", Kind.TEXT, default="", visible=lambda v, i: False),

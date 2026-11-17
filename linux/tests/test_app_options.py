@@ -209,3 +209,30 @@ def test_dynamic_range_and_suggestions():
     assert st.range(opt) == (0.0, 4.0)
     assert om.coerce_number(opt, 9.0, st.range(opt)) == 4.0
     assert st.range(bad) == om.NUMBER_DEFAULT_RANGE
+
+
+def test_adjust_hook_merges_changes_once(all_kinds):
+    st = om.OptionsState(all_kinds)
+    assert st.values["custom_color"] == "#3366cc"
+    seen: list = []
+    st.subscribe(seen.append)
+    st.set_value("format", "png")
+    assert st.values["quality"] == 100 and "nope" not in st.values
+    assert seen == ["format"]
+    st.set_value("quality", 50)
+    assert st.values["quality"] == 50
+
+
+def test_adjust_hook_errors_are_ignored():
+    from quickseemd.core.model import OTHER, ToolDefinition
+
+    def boom(v, k, i):  # noqa: ANN001, ANN202
+        raise RuntimeError("x")
+
+    opt = Option("a", Kind.TOGGLE, default=False)
+    tool = ToolDefinition(
+        "test.adj", OTHER, "a", "a", "questionmark", lambda f, v, c: [], options=(opt,), adjust=boom
+    )
+    st = om.OptionsState(tool)
+    st.set_value("a", True)
+    assert st.values["a"] is True

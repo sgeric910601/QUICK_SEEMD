@@ -317,9 +317,20 @@ def tile_size_class(size: int) -> str:
     return _STYLES.add(name, css)
 
 
-def dot_class(hex_color: str) -> str:
-    """色點按鈕的底色（hex_color 是 #rrggbb，已驗證）。"""
-    clean = hex_color.lstrip("#").lower()
+CHECKERBOARD = """button.qs-dot-transparent {
+  background-color: white;
+  background-image: linear-gradient(45deg, #bbbbbb 25%, transparent 25%, transparent 75%, #bbbbbb 75%),
+    linear-gradient(45deg, #bbbbbb 25%, transparent 25%, transparent 75%, #bbbbbb 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 5px 5px;
+}"""
+
+
+def dot_class(color: str) -> str:
+    """色點按鈕的底色：#rrggbb，或 "transparent"（棋盤格）。"""
+    if color == "transparent":
+        return _STYLES.add("qs-dot-transparent", CHECKERBOARD)
+    clean = color.lstrip("#").lower()
     if len(clean) != 6 or any(c not in "0123456789abcdef" for c in clean):
         clean = "888888"
     name = f"qs-dot-{clean}"

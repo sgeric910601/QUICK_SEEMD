@@ -74,9 +74,16 @@ class OptionsState:
             cb(key)
 
     def set_value(self, key: str, value: Any) -> None:
+        """使用者改了一個值；工具有 adjust 時一併套用它回傳的連動（連動本身不再觸發 adjust）。"""
         if key in self.values and self.values[key] == value:
             return
-        self.values = {**self.values, key: value}
+        values = {**self.values, key: value}
+        adjust = self.tool.adjust
+        if adjust is not None:
+            changes = _safe(lambda: adjust(dict(values), key, self.info), None, "adjust")
+            if isinstance(changes, dict):
+                values.update({k: v for k, v in changes.items() if k in values})
+        self.values = values
         self._notify(key)
 
     def merge(self, changes: Values) -> None:

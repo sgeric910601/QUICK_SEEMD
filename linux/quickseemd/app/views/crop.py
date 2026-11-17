@@ -56,7 +56,7 @@ class CropView:
         self._drag: tuple[str, cm.Rect] | None = None
         self._token = 0
         self.widget = self._build_widget()
-        self.panel = self._build_panel()
+        self.panel = None  # 尺寸與拖曳說明由工具自己的說明選項顯示
         self._unsub = ctx.options.subscribe(self._options_changed)
 
     # ------------------------------------------------------------ 讀檔與比例
@@ -104,27 +104,38 @@ class CropView:
         self._emit()
 
     def _emit(self) -> None:
-        value = cm.to_value(self.rect, self.img_w, self.img_h) if self.img_w else ""
-        self.ctx.options.set_value("crop", value)
-        self.size_value.set_label(
-            cm.size_text(self.rect, self.img_w, self.img_h) if self.img_w else "—"
+        # 自由比例而且框住整張圖＝還沒框選（空字串），工具會提示「請拖曳裁剪框…」
+        untouched = self._ratio is None and self.rect == cm.FULL
+        value = (
+            "" if not self.img_w or untouched else cm.to_value(self.rect, self.img_w, self.img_h)
         )
-        self.orig_value.set_label(f"{self.img_w} × {self.img_h} px" if self.img_w else "—")
+        self.ctx.options.set_value("crop", value)
+        self._show_size()
         self.area.queue_draw()
         self.ctx.changed()
+
+    def _show_size(self) -> None:
+        if not self.img_w:
+            self.size_label.set_label("")
+            return
+        size = cm.size_text(self.rect, self.img_w, self.img_h)
+        self.size_label.set_label(f"{size}（原始 {self.img_w} × {self.img_h} px）")
 
     # ------------------------------------------------------------ 介面
 
     def _build_widget(self) -> Gtk.Widget:
         self.name = label("", "heading", ellipsize="middle")
         self.name.set_hexpand(True)
-        reset = Gtk.Button(icon_name="edit-undo-symbolic", tooltip_text="重設裁剪框")
-        reset.add_css_class("flat")
-        reset.connect("clicked", lambda _b: self.reset())
+        self.size_label = label("", "qs-small", "qs-dim", "qs-mono")
+        reset = secondary("重設裁剪框", "edit-undo-symbolic", on_click=self.reset)
         remove = Gtk.Button(icon_name="window-close-symbolic", tooltip_text="移除這張圖片")
         remove.add_css_class("flat")
         remove.connect("clicked", lambda _b: self.ctx.remove_file())
-        head = hbox(8, icon("image-x-generic-symbolic", 16, "qs-tinted"), self.name, reset, remove)
+        head = hbox(
+            8, icon("image-x-generic-symbolic", 16, "qs-tinted"), self.name, self.size_label
+        )
+        head.append(reset)
+        head.append(remove)
         self.area = Gtk.DrawingArea(hexpand=True, vexpand=True)
         self.area.set_draw_func(self._draw)
         drag = Gtk.GestureDrag()
@@ -147,36 +158,6 @@ class CropView:
             margin_end=20,
         )
         return box
-
-    def _info_row(self, title: str) -> tuple[Gtk.Widget, Gtk.Label]:
-        value = label("—", "qs-mono", "qs-semibold", xalign=1)
-        t = label(title, "qs-dim")
-        t.set_hexpand(True)
-        return hbox(6, t, value), value
-
-    def _build_panel(self) -> Gtk.Widget:
-        size_row, self.size_value = self._info_row("輸出尺寸")
-        orig_row, self.orig_value = self._info_row("原始尺寸")
-        reset = secondary("重設裁剪框", "edit-undo-symbolic", on_click=self.reset)
-        reset.set_halign(Gtk.Align.START)
-        group = vbox(
-            10,
-            hbox(
-                6,
-                icon("edit-select-all-symbolic", 16, "qs-dim"),
-                label("裁剪範圍", "qs-group-title"),
-            ),
-        )
-        group.append(size_row)
-        group.append(orig_row)
-        group.append(reset)
-        note = hbox(
-            8,
-            icon("input-mouse-symbolic", 16, "qs-dim"),
-            label("在圖片上拖曳裁剪框移動位置，拖曳四角調整大小。", "qs-small", wrap=True),
-        )
-        note.add_css_class("qs-note")
-        return vbox(20, group, note)
 
     # ------------------------------------------------------------ 座標
 
@@ -216,7 +197,7 @@ class CropView:
             aspect = self.img_w / self.img_h if self.img_h else 1.0
             min_size = MIN_PX / min(fw, fh)
             self.rect = cm.resize(start, handle, ndx, ndy, self._ratio, aspect, min_size)
-        self.size_value.set_label(cm.size_text(self.rect, self.img_w, self.img_h))
+        self._show_size()
         self.area.queue_draw()
 
     def _drag_end(self) -> None:
