@@ -73,6 +73,10 @@ class Option:
     note: Callable[[Values, Info], tuple[str, bool] | None] | None = None
     # 動態選項（例如依外部工具是否存在而增減的格式）；回傳完整 choices
     dynamic_choices: Callable[[Values, Info], tuple[Choice, ...]] | None = None
+    # 動態範圍（滑桿／數字）：回傳 (最小, 最大)，例如依影片長度決定 GIF 起點上限
+    dynamic_range: Callable[[Values, Info], tuple[float, float]] | None = None
+    # 文字／數字欄位旁的快速填入按鈕（例如 10／25／50 MB），按下就把 value 填入
+    suggestions: tuple[Choice, ...] = ()
 
     def is_visible(self, values: Values, info: Info) -> bool:
         return self.visible is None or bool(self.visible(values, info))
@@ -84,6 +88,13 @@ class Option:
         if self.dynamic_choices is not None:
             return self.dynamic_choices(values, info)
         return self.choices
+
+    def current_range(self, values: Values, info: Info) -> tuple[float | None, float | None]:
+        """目前的（最小, 最大）；有 dynamic_range 時以它為準。"""
+        if self.dynamic_range is not None:
+            lo, hi = self.dynamic_range(values, info)
+            return float(lo), float(max(lo, hi))
+        return self.minimum, self.maximum
 
 
 def defaults(options: tuple[Option, ...]) -> Values:

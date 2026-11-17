@@ -196,6 +196,7 @@ class _Shared:
         self.fraction = 0.0
         self.work_dirs: list[Path] = []
         self.skipped: list[str] = []
+        self.clipboard: str | None = None
         self.lock = threading.Lock()
 
 
@@ -257,6 +258,15 @@ class ToolContext:
     def note_skip(self, message: str) -> None:
         with self._shared.lock:
             self._shared.skipped.append(message)
+
+    @property
+    def clipboard(self) -> str | None:
+        return self._shared.clipboard
+
+    def set_clipboard(self, text: str) -> None:
+        """要放進剪貼簿的文字（工作程序不能持有剪貼簿，由介面程序在完成後拷貝）。"""
+        with self._shared.lock:
+            self._shared.clipboard = text
 
     # ------------------------------------------------------------ 輸出
 
@@ -330,14 +340,17 @@ class RunResult:
     seconds: float = 0.0
     error: str | None = None
     skipped: list[str] = field(default_factory=list)
+    clipboard: str | None = None  # 介面程序完成後要拷貝到剪貼簿的文字
 
     def to_json(self) -> dict[str, Any]:
-        """原版 --qs-run 的結果格式（失敗時用 error 取代 outputs）。"""
+        """原版 --qs-run 的結果格式（失敗時用 error 取代 outputs）；另加 clipboard。"""
         out: dict[str, Any] = {"action": self.action, "seconds": round(self.seconds, 3)}
         if self.error is not None:
             out["error"] = self.error
         else:
             out["outputs"] = [str(p) for p in self.outputs]
+            if self.clipboard is not None:
+                out["clipboard"] = self.clipboard
         if self.summary:
             out["summary"] = self.summary
         return out
