@@ -23,7 +23,8 @@ def _exe(path: Path, body: str = "#!/bin/sh\nexit 0\n") -> Path:
 def test_fallback_runs_module_with_pythonpath(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", [str(tmp_path / "nowhere" / "x.py")])
     argv, env = launcher.app_command("open", "/tmp/a.pdf")
-    assert argv[1:] == ["-m", "quickseemd", "open", "/tmp/a.pdf"]
+    # -P：不把目前資料夾放進模組搜尋路徑，免得被同名模組頂替
+    assert argv[1:] == ["-P", "-m", "quickseemd", "open", "/tmp/a.pdf"]
     assert os.path.isabs(argv[0])
     assert env["PYTHONPATH"].endswith("linux") or Path(env["PYTHONPATH"], "quickseemd").is_dir()
 
@@ -57,7 +58,7 @@ def test_non_executable_candidate_is_skipped(monkeypatch, tmp_path):
     (bindir / "quickseemd").write_text("not executable")
     monkeypatch.setattr(sys, "argv", [str(bindir / "x")])
     argv, _env = launcher.app_command()
-    assert argv[1:3] == ["-m", "quickseemd"]
+    assert argv[1:4] == ["-P", "-m", "quickseemd"]
 
 
 def test_open_files_command(monkeypatch, tmp_path):
@@ -135,4 +136,36 @@ def test_agent_exec_fallback(monkeypatch, tmp_path):
     argv = launcher.agent_command()
     assert argv[0] == "/usr/bin/env"
     assert argv[1].startswith("PYTHONPATH=")
-    assert argv[-2:] == ["-m", "quickseemd.agent"]
+    assert argv[-3:] == ["-P", "-m", "quickseemd.agent"]
+
+
+def _wait_file(path: Path) -> str:
+    deadline = time.monotonic() + 5
+    while not (path.exists() and path.read_text()) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return path.read_text().strip()
+
+
+def test_spawn_runs_in_home_not_inherited_cwd(tmp_path, monkeypatch):
+    marker = tmp_path / "cwd"
+    script = _exe(tmp_path / "pwd.sh", f'#!/bin/sh\npwd -P > "{marker}"\n')
+    monkeypatch.chdir(tmp_path)
+    assert launcher.spawn([str(script)]) is True
+    assert _wait_file(marker) == str(Path.home().resolve())
+
+
+def test_spawn_falls_back_to_root_without_home(tmp_path, monkeypatch):
+    marker = tmp_path / "cwd"
+    script = _exe(tmp_path / "pwd.sh", f'#!/bin/sh\npwd -P > "{marker}"\n')
+    monkeypatch.setenv("HOME", str(tmp_path / "no-such-home"))
+    assert launcher.spawn([str(script)]) is True
+    assert _wait_file(marker) == "/"
+
+
+def test_spawn_keeps_explicit_cwd(tmp_path):
+    marker = tmp_path / "cwd"
+    work = tmp_path / "work"
+    work.mkdir()
+    script = _exe(tmp_path / "pwd.sh", f'#!/bin/sh\npwd -P > "{marker}"\n')
+    assert launcher.spawn([str(script)], cwd=work) is True
+    assert _wait_file(marker) == str(work.resolve())

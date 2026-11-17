@@ -183,9 +183,13 @@ def _move_one(src: Path, dst: Path) -> None:
     except OSError as exc:
         if exc.errno != errno.EXDEV:
             raise
-    # 跨磁碟：先獨佔建立並複製，確認完整後才刪來源（來源是我們自己的暫存檔）
+    # 跨磁碟：先獨佔建立並複製，確認完整後才刪來源
     if src.is_dir() and not src.is_symlink():
+        before = _tree_signature(src)
         _copy_tree_exclusive(src, dst)
+        # 複製期間來源若有新增或變動（使用者的資料夾），就不刪來源，避免遺失檔案
+        if _tree_signature(src) != before:
+            raise OSError(errno.EBUSY, "搬移期間來源資料夾有變動，已保留原資料夾", str(src))
         shutil.rmtree(src)
     else:
         _copy_file_exclusive(src, dst)

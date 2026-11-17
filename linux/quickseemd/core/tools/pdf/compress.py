@@ -28,6 +28,8 @@ from ...model import PDF, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Info, Kind, Option, Values, note
 from ...result import format_size
 from .common import (
+    TIMEOUT_GS_BASE,
+    TIMEOUT_GS_PAGE,
     work_dir,
     INPUT_LABEL,
     PDF_TYPES,
@@ -319,9 +321,12 @@ def _compress_with_gs(ctx: ToolContext, src: Path, out: Path, level: Level) -> b
     # -sOutputFile 的 % 是頁碼格式，要寫成 %%
     args += ["-sOutputFile=" + str(out).replace("%", "%%"), str(src.resolve())]
     try:
-        process.run_checked(args, "Ghostscript", cancel=ctx.cancel_event)
-        with pikepdf.open(out) as check, pikepdf.open(src) as orig:
-            return len(check.pages) == len(orig.pages)
+        with pikepdf.open(src) as orig:
+            pages = len(orig.pages)
+        timeout = TIMEOUT_GS_BASE + TIMEOUT_GS_PAGE * pages
+        process.run_checked(args, "Ghostscript", cancel=ctx.cancel_event, timeout=timeout)
+        with pikepdf.open(out) as check:
+            return len(check.pages) == pages
     except errors.Cancelled:
         raise
     except (errors.QSError, pikepdf.PdfError, OSError) as exc:

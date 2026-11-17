@@ -247,10 +247,10 @@ class ToolPage(Gtk.Box):
         self.note = note
         self.stack.set_visible_child_name("workspace" if self.files else "landing")
         set_warning(self.landing_note, note)
+        self._update_custom()  # 先決定要不要用自訂畫面，才不會白建縮圖格
         self.files_area.set_files(self.files)
         self.add_button.set_visible(bool(self.files))
         self.add_button.set_sensitive(self.tool.allows_multiple or not self.files)
-        self._update_custom()
         self._inspect()
         self._refresh_footer()
 

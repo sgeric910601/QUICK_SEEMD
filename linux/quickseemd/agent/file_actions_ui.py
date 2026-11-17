@@ -61,7 +61,12 @@ class FileActionsUI:
             self._queue.notify(title, ICONS["copy"], message)
 
     def _copy_path(self, paths: list[Path]) -> None:
-        if self._clipboard.set_text(fa.copy_path_text(paths)):
+        text = fa.copy_path_payload(paths)
+        if text is None:
+            title, message = fa.UNSAFE_PATH_NOTICE
+            self._queue.notify(title, ICONS["copy-path"], message)
+            return
+        if self._clipboard.set_text(text):
             title, message = fa.copy_path_notice(paths)
             self._queue.notify(title, ICONS["copy-path"], message)
 

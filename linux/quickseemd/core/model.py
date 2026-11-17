@@ -274,7 +274,8 @@ class ToolContext:
     # ------------------------------------------------------------ 輸出
 
     def output_directory(self, input_path: Path) -> Path:
-        return self.output_folder or Path(input_path).resolve().parent
+        # 不跟隨符號連結：輸出放在連結所在的資料夾，而不是連結指到的地方
+        return self.output_folder or Path(os.path.abspath(input_path)).parent
 
     def output_name(self, input_path: Path, tag: str | None, ext: str) -> str:
         return naming.output_name(input_path, tag, ext)

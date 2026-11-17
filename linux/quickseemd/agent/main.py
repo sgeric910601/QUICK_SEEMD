@@ -23,6 +23,7 @@ from ..core import ipc, naming, settings  # noqa: E402
 from ..core.wheel import WheelItem  # noqa: E402
 from . import launcher  # noqa: E402
 from .clipboard import ClipboardOwner  # noqa: E402
+from .file_actions import clean_clipboard_text  # noqa: E402
 from .file_actions_ui import FileActionsUI  # noqa: E402
 from .hud import HudController, HudWindow  # noqa: E402
 from .queue import JobQueue, QueueItem, Status  # noqa: E402
@@ -174,8 +175,11 @@ class AgentApp(Gtk.Application):
 
     def _item_finished(self, item: QueueItem) -> None:
         """工具要求拷貝的文字（例如 QR Code 內容）：背景程式一直在，剪貼簿就一直有效。"""
-        if item.status is Status.DONE and item.clipboard:
-            self.clipboard.set_text(item.clipboard)
+        if item.status is not Status.DONE or not item.clipboard:
+            return
+        text = clean_clipboard_text(item.clipboard)
+        if text:
+            self.clipboard.set_text(text)
 
     # ------------------------------------------------------------ 輪盤
 

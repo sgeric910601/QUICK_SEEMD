@@ -13,7 +13,15 @@ import pikepdf
 
 from ... import backends, errors
 from ...model import ToolContext
-from .common import crop_box, rotation
+from .common import (
+    TIMEOUT_RENDER_PAGE,
+    TIMEOUT_TEXT_BASE,
+    TIMEOUT_TEXT_PAGE,
+    check_pixels,
+    crop_box,
+    open_image,
+    rotation,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,32 +51,43 @@ def render_page(
     dpi: float,
     out_base: Path,
     *,
+    points: tuple[float, float],
     gray: bool = False,
-    points: tuple[float, float] | None = None,
 ) -> Path:
     """畫出第 page_no 頁（1 起算）成 PNG，回傳圖檔路徑。out_base 不含副檔名。
 
-    points：頁面大小（pt）。pdftocairo 換算像素時無條件進位，給了頁面大小就把解析度
-    微調成四捨五入後的像素數（與原版相同）。
+    points：頁面大小（pt，見 page_points）。一律套用長邊 12000 px 上限（頁面框或 UserUnit
+    再離譜也一樣）；pdftocairo 換算像素時無條件進位，這裡把解析度微調成四捨五入後的像素數。
     """
+    dpi = effective_dpi(points, dpi)
     args = [backends.require("pdftocairo"), "-png", "-cropbox", "-singlefile"]
     args += _resolution_args(dpi, points) + ["-f", str(page_no), "-l", str(page_no)]
     if gray:
         args.append("-gray")
     args += [str(Path(src).resolve()), str(out_base)]
-    _run(ctx, args, "pdftocairo")
+    _run(ctx, args, "pdftocairo", TIMEOUT_RENDER_PAGE)
     out = out_base.with_name(out_base.name + ".png")
     if not out.is_file():
         raise errors.QSError(f"第 {page_no} 頁繪製失敗。")
+    _check_rendered(out, page_no)
     return out
 
 
-def _run(ctx: ToolContext | None, args: list[str], name: str) -> str:
+def _check_rendered(path: Path, page_no: int) -> None:
+    """確認畫出來的圖沒有超過上限（多留 2 px 給進位）。"""
+    with open_image(path) as im:
+        w, h = im.size
+    if max(w, h) > MAX_SIDE_PX + 2:
+        raise errors.QSError(f"第 {page_no} 頁繪製失敗。")
+
+
+def _run(ctx: ToolContext | None, args: list[str], name: str, timeout: float) -> str:
+    """執行外部程式（一律有逾時，超過就結束並顯示「執行逾時」）。"""
     from ... import process  # noqa: PLC0415 — 避免循環匯入
 
     if ctx is not None:
-        return ctx.run_process(args, name).stdout
-    return process.run_checked(args, name).stdout
+        return ctx.run_process(args, name, timeout=timeout).stdout
+    return process.run_checked(args, name, timeout=timeout).stdout
 
 
 def _resolution_args(dpi: float, points: tuple[float, float] | None) -> list[str]:
@@ -86,7 +105,8 @@ def page_texts(ctx: ToolContext | None, src: Path, first: int, last: int) -> lis
     """第 first～last 頁的文字（pdftotext，閱讀順序）；回傳每頁一個字串。"""
     args = [backends.require("pdftotext"), "-enc", "UTF-8", "-f", str(first), "-l", str(last)]
     args += [str(Path(src).resolve()), "-"]
-    out = _run(ctx, args, "pdftotext")
+    timeout = TIMEOUT_TEXT_BASE + TIMEOUT_TEXT_PAGE * (last - first + 1)
+    out = _run(ctx, args, "pdftotext", timeout)
     parts = out.split("\f")
     count = last - first + 1
     parts = (parts + [""] * count)[:count]
@@ -110,9 +130,8 @@ def has_visible_annotations(page: pikepdf.Page) -> bool:
 
 def is_blank_image(path: Path) -> bool:
     """灰階縮圖中比 235 暗的像素少於 0.2%。"""
-    from PIL import Image  # noqa: PLC0415
-
-    with Image.open(path) as im:
+    with open_image(path) as im:
+        check_pixels(im, path.name)
         gray = im.convert("L")
         hist = gray.histogram()
     total = max(sum(hist), 1)

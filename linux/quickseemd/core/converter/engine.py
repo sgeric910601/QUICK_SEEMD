@@ -83,7 +83,7 @@ def _text_detail(path: Path) -> str | None:
     ending = decoded.line_ending
     bom = "（含 BOM）" if decoded.had_bom else ""
     tail = "" if ending is textcodec.LineEnding.NONE else f" · {ending.value}"
-    return decoded.encoding_name + bom + tail
+    return decoded.display_name + bom + tail
 
 
 def _find_target(path: Path, fmt: Format, profile: Profile) -> Target:

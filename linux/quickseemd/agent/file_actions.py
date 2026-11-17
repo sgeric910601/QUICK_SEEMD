@@ -50,8 +50,34 @@ def copy_notice(paths: Sequence[Path]) -> tuple[str, str]:
     return "已拷貝", f"{count_label(paths)}，可到檔案管理員貼上"
 
 
+UNSAFE_PATH_NOTICE = ("拷貝路徑", "有檔名包含控制字元，沒有拷貝。")
+_KEEP_IN_CLIPBOARD = frozenset("\n\t")
+
+
+def _is_control(ch: str) -> bool:
+    """C0（含換行、Tab）、DEL 與 C1 控制字元。"""
+    code = ord(ch)
+    return code < 0x20 or 0x7F <= code <= 0x9F
+
+
+def has_control_chars(text: str) -> bool:
+    return any(_is_control(ch) for ch in text)
+
+
+def clean_clipboard_text(text: str) -> str:
+    """工具要求拷貝的文字：去掉控制字元（只留換行與 Tab），貼到終端機時不會夾帶跳脫序列。"""
+    return "".join(ch for ch in text if ch in _KEEP_IN_CLIPBOARD or not _is_control(ch))
+
+
 def copy_path_text(paths: Sequence[Path]) -> str:
     return "\n".join(str(p) for p in paths)
+
+
+def copy_path_payload(paths: Sequence[Path]) -> str | None:
+    """「拷貝路徑」的內容；有檔名含控制字元（例如換行）就不拷貝，免得貼到終端機變成好幾行指令。"""
+    if any(has_control_chars(str(p)) for p in paths):
+        return None
+    return copy_path_text(paths)
 
 
 def copy_path_notice(paths: Sequence[Path]) -> tuple[str, str]:
@@ -61,12 +87,14 @@ def copy_path_notice(paths: Sequence[Path]) -> tuple[str, str]:
 def clipboard_payloads(paths: Sequence[Path]) -> dict[str, bytes]:
     """「拷貝」放進剪貼簿的內容：檔案管理員能貼上的檔案，以及純文字路徑。"""
     uris = [Path(p).as_uri() for p in paths]
-    text = copy_path_text(paths).encode("utf-8")
     payloads = {
         COPIED_FILES_TARGET: ("copy\n" + "\n".join(uris)).encode("utf-8"),
         URI_LIST_TARGET: ("\r\n".join(uris) + "\r\n").encode("utf-8"),
     }
-    payloads.update({t: text for t in TEXT_TARGETS})
+    # 檔案網址已經百分比編碼；純文字路徑只在沒有控制字元時才提供（和「拷貝路徑」同一規則）
+    text = copy_path_payload(paths)
+    if text is not None:
+        payloads.update({t: text.encode("utf-8") for t in TEXT_TARGETS})
     return payloads
 
 

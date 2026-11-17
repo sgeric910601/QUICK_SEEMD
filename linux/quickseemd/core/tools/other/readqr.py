@@ -1,6 +1,8 @@
 """讀取 QR Code（對應原版 OTQRJob）。
 
-- 圖片取第一格；PDF 取前 20 頁，以 2 倍（144 dpi）畫在白底上（pdftocairo）。
+- 圖片取第一格；PDF 取前 20 頁，以 2 倍大小畫在白底上（pdftocairo），長邊最多 4000 像素；
+  MediaBox 大於 PDF 規格上限（14400 點＝200 吋）或幾乎為 0 的頁面視為異常而略過。
+  每頁畫完就掃描，記憶體裡同時只有一頁。
 - 解碼用 zbar（pyzbar），設成「不轉換」模式拿原始位元組，再自己判斷文字編碼
   （zbar 自己猜編碼時常把 UTF-8 中文誤當成 Shift-JIS）；zbar 找不到時再用 OpenCV 的 QR 偵測。
 - 每個檔案內去除重複；多個檔案時文字檔裡每段前面加「# 檔名」。
@@ -13,6 +15,8 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
+from collections.abc import Iterator
 from ctypes import c_void_p, cast
 from pathlib import Path
 
@@ -27,7 +31,10 @@ log = logging.getLogger(__name__)
 
 NOT_FOUND = "在圖片中找不到 QR Code 或條碼。"
 PDF_PAGE_LIMIT = 20
-PDF_DPI = 144  # 2 倍
+PDF_SCALE = 2  # 原版以 2 倍大小繪製
+MAX_RENDER_PX = 4000  # 繪製後的長邊上限（約 64 MB 的 RGBA 畫面）
+MAX_PAGE_POINTS = 14400.0  # PDF 規格的頁面尺寸上限
+MIN_PAGE_POINTS = 1.0
 SMALL_IMAGE = 400  # 長邊小於這個像素時放大再掃一次
 ZBAR_CFG_BINARY = 4  # zbar 0.23 起的 ZBAR_CFG_BINARY：不把資料轉成文字
 _HEIF_EXTS = frozenset({"heic", "heif", "avif"})
@@ -174,16 +181,75 @@ def _load_image(path: Path, ctx: ToolContext) -> Image.Image:
     raise errors.unreadable(path.name)
 
 
-def _pdf_pages(path: Path, ctx: ToolContext) -> list[Path]:
-    """前 20 頁畫成 PNG（白底、144 dpi）。"""
+Box = tuple[float, float, float, float]
+_PAGES_RE = re.compile(r"^Pages:\s+(\d+)", re.M)
+_BOX_RE = re.compile(r"^Page\s+(\d+)\s+(MediaBox|CropBox):\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)", re.M)
+
+
+def _box_size(box: Box) -> tuple[float, float]:
+    return abs(box[2] - box[0]), abs(box[3] - box[1])
+
+
+def page_is_sane(box: Box) -> bool:
+    """頁面大小合理：每邊至少 1 點、最多 14400 點。"""
+    w, h = _box_size(box)
+    return min(w, h) >= MIN_PAGE_POINTS and max(w, h) <= MAX_PAGE_POINTS
+
+
+def render_long_side(width_pts: float, height_pts: float) -> int:
+    """繪製後的長邊像素：原版的 2 倍，但不超過 MAX_RENDER_PX。"""
+    return min(MAX_RENDER_PX, math.ceil(max(width_pts, height_pts) * PDF_SCALE))
+
+
+def _pdf_boxes(path: Path, ctx: ToolContext) -> dict[int, dict[str, Box]]:
+    """前 20 頁的 MediaBox／CropBox（pdfinfo -box）。"""
+    tool = backends.require("pdfinfo")
+    args = [tool, "-f", "1", "-l", str(PDF_PAGE_LIMIT), "-box", os.path.abspath(path)]
+    res = process.run(args, cancel=ctx.cancel_event)
+    if res.returncode != 0:
+        log.info("pdfinfo 失敗：%s", process.last_lines(res.stderr))
+        raise errors.unreadable(path.name)
+    found = _PAGES_RE.search(res.stdout)
+    count = min(int(found.group(1)) if found else 0, PDF_PAGE_LIMIT)
+    boxes: dict[int, dict[str, Box]] = {n: {} for n in range(1, count + 1)}
+    for m in _BOX_RE.finditer(res.stdout):
+        try:
+            box = (float(m.group(3)), float(m.group(4)), float(m.group(5)), float(m.group(6)))
+        except ValueError:
+            continue
+        boxes.get(int(m.group(1)), {})[m.group(2)] = box
+    return boxes
+
+
+def _render_page(
+    tool: str, path: Path, page: int, long_side: int, work: Path, ctx: ToolContext
+) -> Path | None:
+    out = work / f"page-{page}"
+    args = [tool, "-png", "-singlefile", "-scale-to", str(long_side)]
+    args += ["-f", str(page), "-l", str(page), os.path.abspath(path), str(out)]
+    res = process.run(args, cancel=ctx.cancel_event)
+    png = work / f"page-{page}.png"
+    if res.returncode != 0 or not png.exists():
+        log.info("第 %d 頁畫不出來：%s", page, process.last_lines(res.stderr))
+        return None
+    return png
+
+
+def _pdf_pages(path: Path, ctx: ToolContext) -> Iterator[Path]:
+    """逐頁畫成 PNG（白底、2 倍、長邊最多 4000 像素），尺寸異常的頁面略過。"""
+    boxes = _pdf_boxes(path, ctx)
     tool = backends.require("pdftocairo")
     work = ctx.make_work_dir(ctx.output_directory(path))
-    args = [tool, "-png", "-r", str(PDF_DPI), "-f", "1", "-l", str(PDF_PAGE_LIMIT)]
-    res = process.run([*args, os.path.abspath(path), str(work / "page")], cancel=ctx.cancel_event)
-    if res.returncode != 0:
-        log.info("pdftocairo 失敗：%s", process.last_lines(res.stderr))
-        raise errors.unreadable(path.name)
-    return sorted(work.glob("page-*.png"), key=lambda p: int(p.stem.rsplit("-", 1)[1]))
+    for page, page_boxes in boxes.items():
+        ctx.check_cancelled()
+        media = page_boxes.get("MediaBox")
+        crop = page_boxes.get("CropBox", media)
+        if media is None or crop is None or not (page_is_sane(media) and page_is_sane(crop)):
+            log.info("略過尺寸異常的第 %d 頁：%s", page, media)
+            continue
+        png = _render_page(tool, path, page, render_long_side(*_box_size(crop)), work, ctx)
+        if png is not None:
+            yield png
 
 
 def _is_pdf(path: Path) -> bool:
@@ -192,16 +258,18 @@ def _is_pdf(path: Path) -> bool:
     return filetypes.mime_of(path) == "application/pdf"
 
 
-def scan_file(path: Path, ctx: ToolContext) -> list[str]:
+def _images(path: Path, ctx: ToolContext) -> Iterator[Image.Image]:
     if _is_pdf(path):
-        images = []
         for page in _pdf_pages(path, ctx):
-            ctx.check_cancelled()
-            images.append(_open_image(page))
+            yield _open_image(page)
     else:
-        images = [_load_image(path, ctx)]
+        yield _load_image(path, ctx)
+
+
+def scan_file(path: Path, ctx: ToolContext) -> list[str]:
+    """一個檔案裡所有條碼的內容（去除重複、保持順序）；PDF 每頁畫完就掃。"""
     codes: list[str] = []
-    for img in images:
+    for img in _images(path, ctx):
         ctx.check_cancelled()
         codes.extend(c for c in scan_image(img) if c not in codes)
     return codes

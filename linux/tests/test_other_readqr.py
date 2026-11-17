@@ -223,3 +223,81 @@ def test_runner_no_clipboard_when_nothing_found(tmp_path):
     assert result.error == NOT_FOUND
     assert result.clipboard is None
     assert "clipboard" not in result.to_json()
+
+
+# ------------------------------------------------------------------ PDF 頁面大小上限
+
+
+def _qr_pdf(path: Path, pages: list[tuple[float, float, bool]], tmp_path: Path) -> Path:
+    """依序產生頁面（寬, 高, 是否放 QR）；QR 畫在左上角。"""
+    import cairo
+
+    qr_png = _save(_qr("大頁面 QR", scale=6), tmp_path / f"{path.stem}-qr.png")
+    surface = cairo.PDFSurface(str(path), *pages[0][:2])
+    cr = cairo.Context(surface)
+    for w, h, with_qr in pages:
+        surface.set_size(w, h)
+        if with_qr:
+            img = cairo.ImageSurface.create_from_png(str(qr_png))
+            scale = max(w, h) / 1500  # 讓 QR 在縮小後的畫面裡仍夠大
+            cr.save()
+            cr.scale(scale, scale)
+            cr.set_source_surface(img, 20, 20)
+            cr.paint()
+            cr.restore()
+        cr.show_page()
+    surface.finish()
+    return path
+
+
+def test_render_size_is_capped():
+    from quickseemd.core.tools.other import readqr
+
+    assert readqr.render_long_side(595, 842) == 1684  # 2 倍
+    assert readqr.render_long_side(5000, 3000) == readqr.MAX_RENDER_PX
+    assert readqr.page_is_sane((0, 0, 595, 842))
+    assert not readqr.page_is_sane((0, 0, 20000, 20000))
+    assert not readqr.page_is_sane((0, 0, 0, 842))
+
+
+def test_huge_mediabox_page_is_skipped(tmp_path, monkeypatch):
+    from quickseemd.core.tools.other import readqr
+
+    rendered: list[str] = []
+    real_run = readqr.process.run
+
+    def spy(args, **kw):
+        if "pdftocairo" in args[0]:
+            rendered.append(" ".join(str(a) for a in args))
+        return real_run(args, **kw)
+
+    monkeypatch.setattr(readqr.process, "run", spy)
+    pdf = _qr_pdf(tmp_path / "big.pdf", [(20000, 20000, True), (600, 800, True)], tmp_path)
+    [out], _ = _run([pdf])
+    assert out.read_text("utf-8") == "大頁面 QR\n"
+    assert len(rendered) == 1 and "-f 2 -l 2" in rendered[0]
+
+
+def test_large_page_rendered_within_cap(tmp_path, monkeypatch):
+    from quickseemd.core.tools.other import readqr
+
+    sizes: list[tuple[int, int]] = []
+    real_open = readqr._open_image
+
+    def spy(path):
+        img = real_open(path)
+        sizes.append(img.size)
+        return img
+
+    monkeypatch.setattr(readqr, "_open_image", spy)
+    pdf = _qr_pdf(tmp_path / "wide.pdf", [(9000, 6000, True)], tmp_path)
+    [out], _ = _run([pdf])
+    assert out.read_text("utf-8") == "大頁面 QR\n"
+    assert max(sizes[0]) <= readqr.MAX_RENDER_PX
+
+
+def test_pdf_with_only_absurd_pages_finds_nothing(tmp_path):
+    pdf = _qr_pdf(tmp_path / "absurd.pdf", [(30000, 30000, True)], tmp_path)
+    with pytest.raises(errors.QSError) as exc:
+        _run([pdf])
+    assert str(exc.value) == NOT_FOUND

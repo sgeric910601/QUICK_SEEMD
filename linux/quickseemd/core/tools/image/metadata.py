@@ -215,7 +215,7 @@ def read_tags(path: Path) -> dict[str, Any] | None:
 
 def _pillow_tags(path: Path) -> dict[str, Any] | None:
     try:
-        with Image.open(path) as im:
+        with loader.open_checked(path) as im:
             exif = im.getexif()
             out: dict[str, Any] = {}
             for tag, value in exif.items():
@@ -225,7 +225,7 @@ def _pillow_tags(path: Path) -> dict[str, Any] | None:
             for tag, value in exif.get_ifd(0x8825).items():
                 out[f"EXIF:{ExifTags.GPSTAGS.get(tag, f'GPS{tag}')}"] = value
             return out
-    except (UnidentifiedImageError, OSError, ValueError, SyntaxError):
+    except (errors.QSError, UnidentifiedImageError, OSError, ValueError, SyntaxError):
         return None
 
 
@@ -281,7 +281,7 @@ def _source_format(path: Path) -> str | None:
     if kind:
         return kind
     try:
-        with Image.open(path) as im:
+        with loader.open_checked(path) as im:  # 太大的圖直接以中文錯誤拒絕
             return formats.from_pillow(im.format)
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError):
         return None

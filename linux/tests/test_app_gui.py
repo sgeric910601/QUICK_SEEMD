@@ -716,3 +716,70 @@ def test_output_picker(window, tmp_path):
     home = os.path.expanduser("~")
     assert tilde(home + "/x") == "~/x" and tilde("/opt/x") == "/opt/x"
     settings.save({"tools.output_folder": ""})
+
+
+def _boom(*_a, **_k):  # noqa: ANN002, ANN003, ANN202
+    raise RuntimeError("故意出錯")
+
+
+def test_view_loaders_report_errors_instead_of_hanging(window, data, monkeypatch, tmp_path):
+    """背景載入時任何例外都要變成錯誤狀態（不能一直停在「讀取中」）。"""
+    from quickseemd.app import converter_model, thumbnails
+    from quickseemd.app.views import media_probe
+    from quickseemd.core import registry
+
+    win, state = window
+    monkeypatch.setattr(media_probe, "probe", _boom)
+    state.open(registry.tool("test.trim"), [make_video(tmp_path / "影片.mp4", seconds=1)])
+    page = win.tool_page
+    wait(lambda: page.custom is not None and page.custom.error.get_visible())
+    assert not page.custom.loading.get_visible()
+    monkeypatch.setattr(thumbnails, "open_pdf", _boom)
+    state.open(registry.tool("test.organize"), [data["pdf"]])
+    page = win.tool_page
+    wait(lambda: page.custom is not None and page.custom.model.loaded)
+    assert page.custom.stack.get_visible_child_name() == "empty"
+    assert "無法讀取這份 PDF 的頁面" in labels_in(win)
+    monkeypatch.setattr(thumbnails, "load_preview", _boom)
+    state.open(registry.tool("test.crop"), [data["png"]])
+    page = win.tool_page
+    wait(lambda: page.custom is not None and page.custom.error.get_visible())
+    monkeypatch.setattr(converter_model, "analyze_path", _boom)
+    state.select("converter")
+    conv = win.pages["converter"]
+    conv.add_files([data["png2"]])
+    wait(lambda: not any(j.analyzing for j in conv.model.jobs))
+
+
+def test_organize_opens_pdf_once(window, data, monkeypatch, tmp_path):
+    from quickseemd.app import thumbnails
+    from quickseemd.core import registry
+
+    pdf = make_pdf(tmp_path / "五頁.pdf", pages=5)
+    calls: list = []
+    real = thumbnails.open_pdf
+    monkeypatch.setattr(thumbnails, "open_pdf", lambda p: calls.append(p) or real(p))
+    win, state = window
+    state.open(registry.tool("test.organize"), [pdf])
+    page = win.tool_page
+    wait(lambda: page.custom is not None and len(page.custom.thumbs) == 5)
+    assert calls == [pdf]
+
+
+def test_crop_view_refuses_huge_image(window, tmp_path):
+    from PIL import Image
+
+    from quickseemd.core import registry
+
+    big = tmp_path / "很大.png"
+    Image.new("1", (9000, 9000)).save(big)  # 8100 萬像素：超過解碼上限
+    win, state = window
+    state.open(registry.tool("test.crop"), [big])
+    page = win.tool_page
+    wait(lambda: page.custom is not None and page.custom.img_w == 9000)
+    view = page.custom
+    assert view.pixbuf is None and view.error.get_visible()
+    assert "9000 × 9000 px" in view.error_text.get_label()
+    page.options.set_value("ratio", "square")
+    pump(0.2)
+    assert json.loads(page.options.values["crop"]) == {"x": 0, "y": 0, "w": 9000, "h": 9000}

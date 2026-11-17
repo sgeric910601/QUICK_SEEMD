@@ -48,7 +48,8 @@ def app_command(*args: str) -> tuple[list[str], dict[str, str]]:
     found = find_launcher(APP_LAUNCHER)
     if found is not None:
         return [str(found), *args], {}
-    return [_python(), "-m", "quickseemd", *args], {"PYTHONPATH": str(package_root())}
+    # -P：不把目前資料夾放進模組搜尋路徑（避免被同名模組頂替）
+    return [_python(), "-P", "-m", "quickseemd", *args], {"PYTHONPATH": str(package_root())}
 
 
 def open_files_command(
@@ -67,7 +68,20 @@ def agent_command() -> list[str]:
     found = find_launcher(AGENT_LAUNCHER)
     if found is not None:
         return [str(found)]
-    return ["/usr/bin/env", f"PYTHONPATH={package_root()}", _python(), "-m", "quickseemd.agent"]
+    return [
+        "/usr/bin/env",
+        f"PYTHONPATH={package_root()}",
+        _python(),
+        "-P",
+        "-m",
+        "quickseemd.agent",
+    ]
+
+
+def _default_cwd() -> str:
+    """沒指定工作資料夾時用家目錄（不存在就用 /），不沿用背景程式自己的目前資料夾。"""
+    home = Path.home()
+    return str(home) if home.is_dir() else "/"
 
 
 def spawn(argv: Sequence[str], env: dict[str, str] | None = None, cwd: Path | None = None) -> bool:
@@ -87,7 +101,7 @@ def spawn(argv: Sequence[str], env: dict[str, str] | None = None, cwd: Path | No
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             env=full_env,
-            cwd=str(cwd) if cwd else None,
+            cwd=str(cwd) if cwd else _default_cwd(),
             start_new_session=True,
             close_fds=True,
         )

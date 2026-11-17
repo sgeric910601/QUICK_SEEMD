@@ -13,11 +13,37 @@ from .core.jobs import PROGRESS_FD_ENV
 from .core.runner import JobSpec, run_spec
 
 
+MEM_LIMIT_ENV = "QS_WORKER_MEM_GB"
+DEFAULT_MEM_LIMIT_GB = 8.0
+
+
+def cap_memory() -> int:
+    """限制工作程序（與它啟動的外部程式）的資料區大小，惡意檔案最多吃掉這麼多記憶體。"""
+    import resource  # noqa: PLC0415
+
+    try:
+        gb = float(os.environ.get(MEM_LIMIT_ENV, DEFAULT_MEM_LIMIT_GB))
+    except ValueError:
+        gb = DEFAULT_MEM_LIMIT_GB
+    limit = int(gb * 1024**3)
+    soft, hard = resource.getrlimit(resource.RLIMIT_DATA)
+    if hard != resource.RLIM_INFINITY:
+        limit = min(limit, hard)
+    if soft == resource.RLIM_INFINITY or soft > limit:
+        resource.setrlimit(resource.RLIMIT_DATA, (limit, hard))
+    return limit
+
+
 def main() -> int:
     fd_raw = os.environ.get(PROGRESS_FD_ENV)
     if not fd_raw or not fd_raw.isdigit():
         print("quickseemd.worker 必須由 QUICK_SEEMD 啟動", file=sys.stderr)
         return 2
+    cap_memory()
+    # 載入圖片像素上限（Pillow 的 MAX_IMAGE_PIXELS 與「解壓縮炸彈」警告當錯誤）：
+    # 讓每個工具、萬用轉換裡直接 Image.open 的地方也一起受保護
+    from .core.tools.image import limits as _image_limits  # noqa: F401, PLC0415
+
     out = os.fdopen(int(fd_raw), "w", buffering=1, encoding="utf-8")
     write_lock = threading.Lock()
 

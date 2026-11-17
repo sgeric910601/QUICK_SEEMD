@@ -16,6 +16,7 @@ from typing import Any
 
 from . import errors, quickactions, registry
 from .model import Reporter, RunResult, ToolContext
+from .filetypes import file_ref
 from .result import summary_text
 
 KINDS = ("tool", "action", "convert", "merge-pdf")
@@ -69,11 +70,14 @@ def _run_tool(spec: JobSpec, ctx: ToolContext) -> tuple[list[Path], str]:
         if act is None:
             raise errors.QSError(f"這個版本的 QUICK_SEEMD 不認得動作「{spec.id}」。")
         tool = registry.tool(act.tool_id)
-        if tool is None:
+        if tool is None or not act.enabled:
             raise errors.QSError(f"這個版本的 QUICK_SEEMD 不認得動作「{spec.id}」。")
         values = tool.values_for_preset(act.id)
         if not files:
             raise errors.file_not_found(Path(spec.files[0]).name if spec.files else "")
+        # D-Bus 任何呼叫端都能送動作來：檔案類型不符就不執行（右鍵與輪盤本來就只列出適用的）
+        if not act.accepts([file_ref(f) for f in files]):
+            raise errors.QSError(f"「{act.title}」不適用於這些檔案。")
         return tool.run(files, values, ctx), act.id
     tool = registry.tool(spec.id)
     if tool is None:
@@ -126,9 +130,14 @@ def run_spec(
             result.error = result.skipped[0]
     except errors.QSError as exc:
         result.error = str(exc)
+    except MemoryError:
+        result.error = "記憶體不足：這個檔案太大，超過可以處理的上限。"
     except Exception as exc:  # noqa: BLE001 — 任何意外都要回報成中文訊息，不能讓工作程序無聲掛掉
-        traceback.print_exc(file=sys.stderr)
-        result.error = f"發生未預期的錯誤：{exc}"
+        if type(exc).__name__ in ("DecompressionBombError", "DecompressionBombWarning"):
+            result.error = "圖片太大，超過可以處理的上限。"
+        else:
+            traceback.print_exc(file=sys.stderr)
+            result.error = f"發生未預期的錯誤：{exc}"
     finally:
         ctx.cleanup()
     result.summary = _summary_with_skips(ctx.last_message, result, spec.files)

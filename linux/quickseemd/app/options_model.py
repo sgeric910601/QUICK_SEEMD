@@ -18,10 +18,10 @@ from typing import Any
 from ..core import pagerange
 from ..core.model import ToolDefinition
 from ..core.options import Choice, Info, Kind, Option, Values
+from ..core.tools.media.timefmt import format_time, parse_time  # noqa: F401 — 剪輯畫面也從這裡取用
 
 LOG = logging.getLogger(__name__)
 NUMBER_DEFAULT_RANGE = (0.0, 1_000_000.0)
-_NUM = re.compile(r"^(\d+\.?\d*|\.\d+)$")
 _RATIO = re.compile(r"^r?(\d+(?:\.\d+)?)\s*[:x/×]\s*(\d+(?:\.\d+)?)$")
 
 Listener = Callable[["str | None"], None]
@@ -197,40 +197,7 @@ def slider_text(opt: Option, value: Any) -> str:
     return f"{float(value):.{digits_for(opt)}f}"
 
 
-# ---------------------------------------------------------------- 時間（對應原版 MTTime）
-
-
-def parse_time(text: str) -> float | None:
-    """解析「75」「75.5」「1:15」「1:15.5」「0:01:15」；不正確回傳 None。"""
-    t = text.strip().replace("：", ":").replace("。", ".").replace("s", "").replace("秒", "")
-    if not t:
-        return None
-    parts = t.split(":")
-    if len(parts) > 3:
-        return None
-    total = 0.0
-    for i, part in enumerate(parts):
-        if not _NUM.match(part):
-            return None
-        v = float(part)
-        if i < len(parts) - 1 and not v.is_integer():
-            return None
-        if i > 0 and v >= 60:
-            return None
-        total = total * 60 + v
-    return total
-
-
-def format_time(seconds: float, decimals: int = 1) -> str:
-    """65.25 → "1:05.3"；3725 → "1:02:05.0"。"""
-    s = max(0.0, seconds if math.isfinite(seconds) else 0.0)
-    factor = 10**decimals
-    rounded = math.floor(s * factor + 0.5) / factor
-    whole = int(rounded)
-    h, m = whole // 3600, (whole % 3600) // 60
-    sec = rounded - (h * 3600 + m * 60)
-    sec_text = f"{sec:0{decimals + 3}.{decimals}f}" if decimals > 0 else f"{int(sec):02d}"
-    return f"{h}:{m:02d}:{sec_text}" if h > 0 else f"{m}:{sec_text}"
+# ---------------------------------------------------------------- 時間（共用核心的 MTTime 移植）
 
 
 def time_ok(text: str) -> bool:
