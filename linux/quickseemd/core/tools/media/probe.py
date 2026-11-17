@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -17,6 +18,9 @@ PROBE_TIMEOUT = 60.0
 KEYFRAME_SCAN_LIMIT = 300 * 1000 * 1000
 # 找「某個時間點以前的關鍵影格」時，先往前看這麼多秒
 KEYFRAME_WINDOW = 20.0
+
+# ffprobe 的比例寫法：「30000/1001」、「4:3」或整數
+_RATIONAL = re.compile(r"([0-9]{1,10})(?:[/:]([0-9]{1,10}))?")
 
 _VIDEO_TITLES = {
     "h264": "H.264",
@@ -172,9 +176,12 @@ def _number(value: Any, default: float = 0.0) -> float:
 
 
 def _rational(text: Any) -> float:
-    num, _, den = str(text or "").partition("/")
-    d = _number(den, 1.0) if den else 1.0
-    return _number(num) / d if d else 0.0
+    """「30000/1001」「4:3」「25」→ 數值；格式不對或分母為 0 時回傳 0。"""
+    m = _RATIONAL.fullmatch(str(text or ""))
+    if not m:
+        return 0.0
+    den = int(m.group(2)) if m.group(2) else 1
+    return int(m.group(1)) / den if den else 0.0
 
 
 def _tag_bitrate(stream: dict[str, Any]) -> float:
@@ -224,6 +231,7 @@ def _video_fields(s: dict[str, Any], fmt_rate: float, audio_rate: float) -> dict
         fps = _rational(rate_text)
     if fps <= 1:
         fps, rate_text = 30.0, "30"
+    rate_text = rate_text.replace(":", "/")  # 會放進 fps 濾鏡，只留「整數/整數」
     bitrate = _number(s.get("bit_rate")) or _tag_bitrate(s)
     if bitrate <= 0 and fmt_rate > 0:
         bitrate = max(0.0, fmt_rate - audio_rate)

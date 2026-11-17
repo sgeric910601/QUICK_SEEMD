@@ -115,6 +115,8 @@ def fast_trim(
     file: Path, info: MediaInfo, segments: list[tuple[float, float]], d: Path, ctx: ToolContext
 ) -> Path | None:
     """各段直接複製後接起來；任何一步失敗回傳 None（改用重新編碼）。"""
+    if not segments:
+        return None
     ext = engine.container_for(file).ext
     parts: list[Path] = []
     for i, seg in enumerate(segments):

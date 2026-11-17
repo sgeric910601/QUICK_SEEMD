@@ -191,3 +191,33 @@ def test_input_types_accept_media(video_file, audio_file):
     assert tool("video.convert").accepts(video_file)
     assert not tool("video.convert").accepts(audio_file)
     assert tool("audio.convert").accepts(audio_file)
+
+
+def test_frame_rate_text_is_sanitized():
+    fields = mprobe._video_fields(
+        {"avg_frame_rate": "25/1,setpts=0", "r_frame_rate": "x", "width": 2, "height": 2},
+        0.0,
+        0.0,
+    )
+    assert fields["fps_rational"] == "30"
+    ok = mprobe._video_fields({"avg_frame_rate": "30000/1001"}, 0.0, 0.0)
+    assert ok["fps_rational"] == "30000/1001"
+    assert abs(ok["fps"] - 29.97) < 0.01
+
+
+def test_anamorphic_sample_aspect_ratio(tmp_path):
+    src = tmp_path / "寬像素.mp4"
+    run_ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=1:size=320x240:rate=25,setsar=4/3",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        str(src),
+    )
+    info = mprobe.probe(src)
+    assert info.sar == pytest.approx(4 / 3)
+    assert info.display_size == (427, 240)
