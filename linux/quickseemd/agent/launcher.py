@@ -11,12 +11,11 @@ import logging
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 from collections.abc import Sequence
 from pathlib import Path
 
-from ..core import settings
+from ..core import autostart, errors
 from ..core.jobs import package_root
 
 log = logging.getLogger(__name__)
@@ -24,9 +23,7 @@ log = logging.getLogger(__name__)
 APP_LAUNCHER = "quickseemd"
 AGENT_LAUNCHER = "quickseemd-agent"
 PYTHON = "/usr/bin/python3"
-APP_ICON = "dev.quickseemd.App"
-_RESERVED = frozenset(" \t\n\"'\\><~|&;$*?#()`")
-_ESCAPE_IN_QUOTES = frozenset('"`$\\')
+APP_ICON = autostart.APP_ICON
 
 
 def _python() -> str:
@@ -101,57 +98,23 @@ def spawn(argv: Sequence[str], env: dict[str, str] | None = None, cwd: Path | No
     return True
 
 
-def _quote_arg(arg: str) -> str:
-    value = arg.replace("%", "%%")
-    if any(c in _RESERVED for c in value):
-        inner = "".join("\\" + c if c in _ESCAPE_IN_QUOTES else c for c in value)
-        value = f'"{inner}"'
-    # .desktop 的字串層級跳脫：反斜線與控制字元
-    value = value.replace("\\", "\\\\")
-    return value.replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
-
-
-def desktop_exec(argv: Sequence[str]) -> str:
-    """依 Desktop Entry 規格把參數清單寫成 Exec= 的值。"""
-    return " ".join(_quote_arg(a) for a in argv)
+desktop_exec = autostart.desktop_exec
 
 
 def autostart_desktop(argv: Sequence[str]) -> str:
-    return (
-        "[Desktop Entry]\n"
-        "Type=Application\n"
-        "Name=QUICK_SEEMD\n"
-        "Comment=萬用預覽・轉檔・工具箱\n"
-        f"Exec={desktop_exec(argv)}\n"
-        f"Icon={APP_ICON}\n"
-        "Terminal=false\n"
-        "NoDisplay=true\n"
-        "X-GNOME-Autostart-enabled=true\n"
-    )
+    return autostart.entry(argv)
 
 
 def autostart_enabled() -> bool:
-    path = settings.autostart_path()
-    try:
-        text = path.read_text("utf-8")
-    except OSError:
-        return False
-    lines = {line.strip() for line in text.splitlines()}
-    return "Hidden=true" not in lines and "X-GNOME-Autostart-enabled=false" not in lines
+    return autostart.enabled()
 
 
 def set_autostart(enabled: bool) -> None:
-    """建立或刪除自動啟動檔（只動我們自己的這一個檔案）。"""
-    path = settings.autostart_path()
-    if not enabled:
-        path.unlink(missing_ok=True)
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".quickseemd-", suffix=".desktop", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(autostart_desktop(agent_command()))
-        os.replace(tmp, path)  # 我們自己的檔案，可以整份換新
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    """建立或刪除自動啟動檔（規則見 core.autostart：只動我們自己的這一個檔案）。"""
+    if enabled:
+        try:
+            autostart.enable(agent_command())
+        except errors.QSError:
+            log.exception("無法建立自動啟動檔")
+    else:
+        autostart.disable()

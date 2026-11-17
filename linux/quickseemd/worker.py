@@ -8,7 +8,7 @@ import signal
 import sys
 import threading
 
-from .core import process
+from .core import errors, process
 from .core.jobs import PROGRESS_FD_ENV
 from .core.runner import JobSpec, run_spec
 
@@ -31,8 +31,13 @@ def main() -> int:
     cancel = threading.Event()
 
     def on_term(_signum, _frame) -> None:  # noqa: ANN001
+        # 設旗標、結束外部程式，並在主執行緒丟出「已取消」：
+        # 就算工具正在做不檢查取消的長運算，回到 Python 時也會中斷，執行器的 finally 會清掉暫存資料夾
+        first = not cancel.is_set()
         cancel.set()
         process.terminate_all()
+        if first:
+            raise errors.Cancelled()
 
     signal.signal(signal.SIGTERM, on_term)
 

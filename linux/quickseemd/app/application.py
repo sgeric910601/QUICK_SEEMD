@@ -18,7 +18,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from .. import __version__  # noqa: E402
-from ..core import ipc, registry, settings  # noqa: E402
+from ..core import ipc, naming, registry, settings  # noqa: E402
 from . import dbus, routing  # noqa: E402
 from .cmdline import parse_open_args  # noqa: E402
 from .state import AppState  # noqa: E402
@@ -45,6 +45,7 @@ class QuickSeemdApp(Adw.Application):
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
         GLib.set_application_name("QUICK_SEEMD")
+        naming.sweep_in_background()  # 清掉被強制中斷的工作留下的暫存資料夾
         for name, handler in (
             ("open-files", self.choose_files),
             ("preferences", self.show_preferences),

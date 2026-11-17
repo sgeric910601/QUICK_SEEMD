@@ -240,14 +240,106 @@ def make_work_dir(near: Path) -> Path:
     except OSError:
         pass
     try:
-        return Path(tempfile.mkdtemp(prefix=WORK_PREFIX, dir=near))
+        outside = Path(tempfile.mkdtemp(prefix=WORK_PREFIX, dir=near))
     except OSError:
         cache.mkdir(parents=True, exist_ok=True)
         return Path(tempfile.mkdtemp(prefix="job-", dir=cache))
+    _remember_outside(outside)
+    return outside
 
 
 def remove_work_dir(path: Path) -> None:
     """只刪 make_work_dir 建出來的暫存資料夾。"""
     p = Path(path)
-    if p.name.startswith(("job-", WORK_PREFIX)) and p.is_dir():
+    if p.name.startswith(("job-", WORK_PREFIX)) and p.is_dir() and not p.is_symlink():
         shutil.rmtree(p, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- 清掉被中斷工作留下的暫存資料夾
+
+STALE_SECONDS = 24 * 3600
+_OUTSIDE_LIST = "outside-dirs.txt"
+
+
+def _outside_list() -> Path:
+    return _cache_root() / _OUTSIDE_LIST
+
+
+def _remember_outside(path: Path) -> None:
+    """記下建在輸出資料夾裡的隱藏暫存資料夾，工作被強制結束時之後還能找到並清掉。"""
+    try:
+        _cache_root().mkdir(parents=True, exist_ok=True)
+        with open(_outside_list(), "a", encoding="utf-8") as fh:
+            fh.write(os.fspath(path) + "\n")
+    except OSError:
+        pass
+
+
+def _is_stale(p: Path, now: float, max_age: float) -> bool:
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    return now - st.st_mtime > max_age
+
+
+def sweep_stale_work_dirs(max_age: float = STALE_SECONDS) -> int:
+    """刪掉超過 max_age 秒的暫存資料夾（工作程序被強制結束時留下的）；回傳刪了幾個。
+
+    只碰快取裡的 job-* 與清單上記錄過、名稱是 .quickseemd-* 的資料夾，不會掃描使用者的資料夾。
+    """
+    import time  # noqa: PLC0415
+
+    now = time.time()
+    removed = 0
+    cache = _cache_root()
+    if cache.is_dir():
+        for child in cache.iterdir():
+            if child.name.startswith("job-") and _is_stale(child, now, max_age):
+                remove_work_dir(child)
+                removed += 1
+    keep: list[str] = []
+    try:
+        listed = _outside_list().read_text("utf-8").splitlines()
+    except OSError:
+        listed = []
+    for line in listed:
+        p = Path(line)
+        if not p.name.startswith(WORK_PREFIX) or not p.is_dir():
+            continue
+        if _is_stale(p, now, max_age):
+            remove_work_dir(p)
+            removed += 1
+        else:
+            keep.append(line)
+    if listed:
+        _rewrite_outside_list(keep)
+    return removed
+
+
+def sweep_in_background() -> None:
+    """程式啟動時在背景清一次（不拖慢啟動）。"""
+    import logging  # noqa: PLC0415
+    import threading  # noqa: PLC0415
+
+    def work() -> None:
+        try:
+            count = sweep_stale_work_dirs()
+        except OSError:
+            logging.getLogger(__name__).exception("清理暫存資料夾失敗")
+            return
+        if count:
+            logging.getLogger(__name__).info("清掉 %d 個過期的暫存資料夾", count)
+
+    threading.Thread(target=work, name="qs-sweep", daemon=True).start()
+
+
+def _rewrite_outside_list(lines: list[str]) -> None:
+    target = _outside_list()
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".outside-", dir=target.parent)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("".join(f"{line}\n" for line in lines))
+        os.replace(tmp, target)  # 我們自己的清單檔
+    except OSError:
+        pass

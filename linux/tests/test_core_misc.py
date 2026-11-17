@@ -389,3 +389,17 @@ def test_process_not_executable_closes_output_file(tmp_path):
     with pytest.raises(errors.QSError, match="轉換失敗"):
         process.run([str(exe)], stdout_path=out)
     assert out.exists() and out.stat().st_size == 0
+
+
+def test_skipped_files_appear_in_summary(extra_tools, tmp_path):
+    from quickseemd.core.model import ToolContext
+    from quickseemd.core.runner import _summary_with_skips
+    from quickseemd.core.model import RunResult
+
+    res = RunResult(
+        action="x", outputs=[tmp_path / "a.png"], skipped=["在「b」裡找不到臉孔，未產生檔案。"]
+    )
+    text = _summary_with_skips("處理中：b.png", res, [str(tmp_path / "b.png")])
+    assert text == "已略過 1 個檔案：在「b」裡找不到臉孔，未產生檔案。"
+    text = _summary_with_skips("共處理 2 張臉", res, [])
+    assert text.startswith("共處理 2 張臉；已略過 1 個檔案：")

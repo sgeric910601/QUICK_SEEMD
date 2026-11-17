@@ -118,7 +118,8 @@ def run(
         _unregister(proc.pid)
         if out_file is not None:
             out_file.close()
-    if outcome == "cancelled":
+    # 工作程序收到取消時會先結束子程序群組，wait 可能先回來：以取消旗標為準
+    if outcome == "cancelled" or (cancel is not None and cancel.is_set()):
         raise errors.Cancelled()
     if outcome == "timeout":
         raise errors.tool_failed(tool, "執行逾時。")

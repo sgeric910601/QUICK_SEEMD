@@ -8,3 +8,4 @@ Icon=dev.quickseemd.App
 Terminal=false
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
+X-QuickSeemd-Autostart=true

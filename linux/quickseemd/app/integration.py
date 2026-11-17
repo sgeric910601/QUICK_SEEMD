@@ -12,11 +12,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..core import errors, settings
+from ..core import autostart, errors, settings
 
 LOG = logging.getLogger(__name__)
 
-MARKER = "X-QuickSeemd-Autostart=true"
+MARKER = autostart.MARKER
 LAUNCHER_NAME = "quickseemd-agent"
 WHEEL_CONFLICT_TEXT = "有兩個輪盤用了同一個按鍵，只會開啟排在前面的那個"
 # （模式, 標題, 原版 SF Symbol）
@@ -92,53 +92,28 @@ def desktop_quote(arg: str) -> str:
 
 
 def autostart_entry(launcher: Path) -> str:
-    return (
-        "[Desktop Entry]\n"
-        "Type=Application\n"
-        "Name=QUICK_SEEMD\n"
-        "Comment=萬用預覽・轉檔・工具箱\n"
-        f"Exec={desktop_quote(str(launcher))}\n"
-        "Icon=dev.quickseemd.App\n"
-        "NoDisplay=true\n"
-        "X-GNOME-Autostart-enabled=true\n"
-        f"{MARKER}\n"
-    )
+    return autostart.entry([str(launcher)])
 
 
 def autostart_enabled() -> bool:
-    return settings.autostart_path().is_file()
+    return autostart.enabled()
 
 
 def enable_autostart(launcher: Path | None = None) -> Path:
-    """建立自動啟動檔；已經有了就不動（絕不覆蓋）。"""
+    """建立自動啟動檔（規則見 core.autostart）；我們的檔案已經開著就不動。"""
     target = settings.autostart_path()
-    if target.exists():
+    if autostart.is_ours(target) and autostart.enabled():
         return target
     exe = launcher or agent_launcher()
     if not exe.is_file():
         raise errors.QSError(f"找不到背景程式「{exe}」，請重新執行安裝程式。")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with open(target, "x", encoding="utf-8") as fh:
-        fh.write(autostart_entry(exe))
-    return target
+    return autostart.enable([str(exe)])
 
 
 def is_our_autostart(path: Path) -> bool:
-    try:
-        text = path.read_text("utf-8", errors="replace")
-    except OSError:
-        return False
-    return MARKER in text or LAUNCHER_NAME in text
+    return autostart.is_ours(path)
 
 
 def disable_autostart() -> bool:
     """只刪 settings.autostart_path() 這一個檔，而且內容要是我們的。"""
-    target = settings.autostart_path()
-    if not target.is_file() or not is_our_autostart(target):
-        return False
-    try:
-        target.unlink()
-    except OSError:
-        LOG.exception("無法移除自動啟動檔")
-        return False
-    return True
+    return autostart.disable()

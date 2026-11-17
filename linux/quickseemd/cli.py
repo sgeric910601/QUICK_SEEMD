@@ -44,7 +44,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     payload = json.dumps(result.to_json(), ensure_ascii=False, indent=2, sort_keys=True)
     print(payload)
     if args.result:
-        Path(args.result).expanduser().write_text(payload + "\n", "utf-8")
+        try:  # 結果檔一律新建，不覆蓋既有的檔案
+            with open(Path(args.result).expanduser(), "x", encoding="utf-8") as fh:
+                fh.write(payload + "\n")
+        except FileExistsError:
+            print(f"錯誤：結果檔「{args.result}」已經存在，沒有覆蓋。", file=sys.stderr)
+            return 2
     return 0 if result.error is None else 1
 
 

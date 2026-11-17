@@ -131,3 +131,47 @@ def test_work_dir_is_removable_only_if_ours(tmp_path):
 def test_unique_path(tmp_path):
     (tmp_path / "a.pdf").write_text("")
     assert naming.unique_path(tmp_path, "a.pdf") == Path(tmp_path / "a (1).pdf")
+
+
+def test_sweep_removes_only_stale_work_dirs(tmp_path, monkeypatch):
+    import os
+    import time
+
+    old = naming.make_work_dir(tmp_path)  # 可能在快取或 tmp_path 裡
+    fresh = naming.make_work_dir(tmp_path)
+    mine = tmp_path / "使用者的資料夾"
+    mine.mkdir()
+    past = time.time() - 3 * 24 * 3600
+    os.utime(old, (past, past))
+    os.utime(mine, (past, past))
+    assert naming.sweep_stale_work_dirs() >= 1
+    assert not old.exists() and fresh.exists() and mine.exists()
+    naming.remove_work_dir(fresh)
+
+
+def test_outside_dirs_are_remembered_and_swept(tmp_path, monkeypatch):
+    import os
+    import time
+
+    monkeypatch.setattr(naming.os, "stat", _fake_stat_other_device(naming.os.stat, tmp_path))
+    d = naming.make_work_dir(tmp_path)
+    assert d.parent == tmp_path and d.name.startswith(naming.WORK_PREFIX)
+    past = time.time() - 3 * 24 * 3600
+    os.utime(d, (past, past))
+    monkeypatch.undo()
+    assert naming.sweep_stale_work_dirs() == 1 and not d.exists()
+
+
+def _fake_stat_other_device(real_stat, other):
+    class _St:
+        def __init__(self, st, dev):
+            self._st, self.st_dev = st, dev
+
+        def __getattr__(self, name):
+            return getattr(self._st, name)
+
+    def fake(p, *a, **kw):
+        st = real_stat(p, *a, **kw)
+        return _St(st, st.st_dev + 1) if str(p) == str(other) else st
+
+    return fake

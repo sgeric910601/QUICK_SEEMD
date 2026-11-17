@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -24,6 +25,7 @@ from typing import Any
 from . import process
 from .runner import JobSpec
 
+LOG = logging.getLogger(__name__)
 PROGRESS_FD_ENV = "QS_PROGRESS_FD"
 CANCEL_GRACE_SECONDS = 3.0
 
@@ -81,7 +83,8 @@ class WorkerJob:
         root = str(package_root())
         env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         return subprocess.Popen(  # noqa: S603 — 固定的指令，不經過 shell
-            [self.python, "-m", "quickseemd.worker"],
+            # -s：不載入使用者自己 pip 裝的套件，和啟動檔一致
+            [self.python, "-s", "-m", "quickseemd.worker"],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=None,
@@ -91,6 +94,16 @@ class WorkerJob:
         )
 
     def _read(self, fd: int) -> None:
+        """讀進度與結果；不管中途出什麼錯，最後一定回報 on_done（介面才不會卡在執行中）。"""
+        result: dict[str, Any] | None = None
+        try:
+            result = self._read_events(fd)
+        except Exception:  # noqa: BLE001 — 記錄後照常收尾
+            LOG.exception("讀取工作進度失敗")
+        finally:
+            self._finish(result)
+
+    def _read_events(self, fd: int) -> dict[str, Any] | None:
         result: dict[str, Any] | None = None
         with os.fdopen(fd, "rb") as fh:
             for raw in fh:
@@ -98,13 +111,28 @@ class WorkerJob:
                     event = json.loads(raw)
                 except ValueError:
                     continue
-                if event.get("type") == "progress" and self.on_progress:
-                    msg = event.get("message")
-                    self.on_progress(
-                        float(event.get("fraction", 0)), msg if isinstance(msg, str) else None
-                    )
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") == "progress":
+                    self._report_progress(event)
                 elif event.get("type") == "result":
                     result = event
+        return result
+
+    def _report_progress(self, event: dict[str, Any]) -> None:
+        if self.on_progress is None:
+            return
+        try:
+            fraction = float(event.get("fraction") or 0)
+        except (TypeError, ValueError):
+            return
+        msg = event.get("message")
+        try:
+            self.on_progress(fraction, msg if isinstance(msg, str) else None)
+        except Exception:  # noqa: BLE001 — 介面的回呼出錯不能讓讀取中斷
+            LOG.exception("進度回呼失敗")
+
+    def _finish(self, result: dict[str, Any] | None) -> None:
         assert self._proc is not None
         self._proc.wait()
         process._unregister(self._proc.pid)  # noqa: SLF001
@@ -123,7 +151,10 @@ class WorkerJob:
             }
         self.result = result
         if self.on_done:
-            self.on_done(result)
+            try:
+                self.on_done(result)
+            except Exception:  # noqa: BLE001
+                LOG.exception("完成回呼失敗")
 
     def cancel(self) -> None:
         self._cancelled.set()

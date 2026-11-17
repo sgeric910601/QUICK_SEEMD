@@ -16,6 +16,7 @@ from typing import Any
 
 from . import errors, quickactions, registry
 from .model import Reporter, RunResult, ToolContext
+from .result import summary_text
 
 KINDS = ("tool", "action", "convert", "merge-pdf")
 
@@ -130,7 +131,23 @@ def run_spec(
         result.error = f"發生未預期的錯誤：{exc}"
     finally:
         ctx.cleanup()
-    result.summary = ctx.last_message
+    result.summary = _summary_with_skips(ctx.last_message, result, spec.files)
     result.clipboard = ctx.clipboard
     result.seconds = time.monotonic() - started
     return result
+
+
+MAX_SKIP_LINES = 3
+
+
+def _summary_with_skips(
+    last_message: str | None, result: RunResult, inputs: list[str]
+) -> str | None:
+    """有檔案被略過、但還有其他輸出時，把略過的原因接在摘要後面（原版「已略過 N 個：…」）。"""
+    if not result.skipped or not result.outputs:
+        return last_message
+    shown = "；".join(result.skipped[:MAX_SKIP_LINES])
+    more = "…" if len(result.skipped) > MAX_SKIP_LINES else ""
+    skip_text = f"已略過 {len(result.skipped)} 個檔案：{shown}{more}"
+    base = summary_text(last_message, [Path(f) for f in inputs])
+    return f"{base}；{skip_text}" if base else skip_text

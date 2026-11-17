@@ -19,7 +19,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from ..core import ipc, settings  # noqa: E402
+from ..core import ipc, naming, settings  # noqa: E402
 from ..core.wheel import WheelItem  # noqa: E402
 from . import launcher  # noqa: E402
 from .clipboard import ClipboardOwner  # noqa: E402
@@ -71,6 +71,7 @@ class AgentApp(Gtk.Application):
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
         self.hold()
+        naming.sweep_in_background()  # 清掉被強制中斷的工作留下的暫存資料夾
         self._build()
         self._ready = True
         log.info("背景程式已啟動")
