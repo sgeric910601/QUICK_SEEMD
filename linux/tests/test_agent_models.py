@@ -171,8 +171,10 @@ def test_catalog_skips_actions_without_tools(fake_tools, tmp_path):
     make_image(f)
     titles = [i.title for i in wm.build_catalog("tools", [f])]
     assert titles == ["向右旋轉 90°", "壓縮成 ZIP", "讀取 QR Code", "更多工具"]
-    convert = [i.title for i in wm.build_catalog("convert", [f])]
-    assert convert == ["更多格式"]
+    # 假工具裡沒有「轉成 JPG」這類動作的工具：轉換輪盤只剩萬用轉換的格式格子與「更多格式」
+    convert = wm.build_catalog("convert", [f])
+    assert all(i.kind in ("format", "more") for i in convert)
+    assert convert[-1].title == "更多格式"
 
 
 def test_catalog_actions_wheel_is_fixed(tmp_path):
