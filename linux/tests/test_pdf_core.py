@@ -284,3 +284,75 @@ def test_verify_pages_mismatch(tmp_path, pdf_file):
     junk.write_bytes(b"x")
     with pytest.raises(errors.QSError, match="寫入輸出檔失敗"):
         common.verify_pages(junk, 1)
+
+
+# ------------------------------------------------------------------ 惡意結構（不可信的檔案）
+
+
+def _hostile_name_tree(pdf: pikepdf.Pdf) -> None:
+    """自己參照自己、又層層重複參照同一批節點的名稱樹（沒有防護時會指數爆量）。"""
+    leaf = pdf.make_indirect(
+        pikepdf.Dictionary(Names=[pikepdf.String("x"), [pdf.pages[0].obj, Name.Fit]])
+    )
+    node = leaf
+    for _ in range(25):  # 3^25 條路徑；名稱樹深度上限是 32
+        node = pdf.make_indirect(pikepdf.Dictionary(Kids=[node, node, node]))
+    loop = pdf.make_indirect(pikepdf.Dictionary())
+    loop.Kids = pikepdf.Array([loop, node, loop])
+    pdf.Root.Names = pikepdf.Dictionary(Dests=loop)
+
+
+def test_name_tree_cycles_and_dags_finish_quickly(pdf_file):
+    import time
+
+    with pikepdf.open(pdf_file) as pdf:
+        _hostile_name_tree(pdf)
+        started = time.monotonic()
+        dests = outline.Destinations.of(pdf)
+        assert dests.resolve(pikepdf.String("x")) is not None
+        assert dests.resolve(pikepdf.String("沒有")) is None
+        assert dests.resolve(Name("/x")) is not None
+        assert dests.resolve(42) is None
+    assert time.monotonic() - started < 2
+
+
+def test_looping_outline_and_links_finish_quickly(tmp_path, pdf_file):
+    import time
+
+    with pikepdf.open(pdf_file) as pdf:
+        _hostile_name_tree(pdf)
+        root = pdf.make_indirect(pikepdf.Dictionary(Type=Name.Outlines))
+        a = pdf.make_indirect(pikepdf.Dictionary(Title="A", Dest=pikepdf.String("x")))
+        b = pdf.make_indirect(pikepdf.Dictionary(Title="B", Dest=[pdf.pages[1].obj, Name.Fit]))
+        a.Next, b.Next = b, a  # 兄弟互相指向
+        a.First = root  # 子書籤指回根
+        root.First = a
+        pdf.Root.Outlines = root
+        links = [
+            pdf.make_indirect(
+                pikepdf.Dictionary(
+                    Type=Name.Annot, Subtype=Name.Link, Rect=[0, 0, 9, 9], Dest=pikepdf.String("x")
+                )
+            )
+            for _ in range(200)
+        ]
+        pdf.pages[1].obj.Annots = pikepdf.Array(links)
+        started = time.monotonic()
+        nodes = outline.read_outline(pdf, lambda i: i)
+        assemble.write([assemble.Entry(pdf, 1)], (), {}, tmp_path / "o.pdf")
+    assert time.monotonic() - started < 3
+    assert [n.title for n in nodes] == ["A", "B"]
+    with pikepdf.open(tmp_path / "o.pdf") as res:
+        assert "/Annots" not in res.pages[0].obj  # 指向第 1 頁（不在新文件）的連結都移除
+
+
+def test_parent_loop_does_not_hang():
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(100, 100))
+    page = pdf.pages[0].obj
+    a = pdf.make_indirect(pikepdf.Dictionary())
+    a.Parent = a
+    del page["/MediaBox"]
+    page.Parent = a
+    assert common.crop_box(page) == (0.0, 0.0, *common.A4)
+    assert common.rotation(page) == 0

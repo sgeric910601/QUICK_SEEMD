@@ -20,7 +20,7 @@ from pikepdf import Name
 
 from ... import errors
 from .common import A4, rotation, save_pdf, verify_pages, write_info
-from .outline import OutlineNode, explicit_dest, write_outline
+from .outline import Destinations, OutlineNode, explicit_dest, write_outline
 
 log = logging.getLogger(__name__)
 
@@ -60,16 +60,18 @@ def prepare_links(pdf: pikepdf.Pdf) -> None:
 
     無法解析的具名連結標記成「指向外部」，寫出時移除（原版 linkPointsOutside）。
     """
+    dests: Destinations | None = None
     for page in pdf.pages:
         annots = page.obj.get("/Annots")
         if not isinstance(annots, pikepdf.Array):
             continue
         for annot in annots:
             if isinstance(annot, pikepdf.Dictionary) and annot.get("/Subtype") == Name.Link:
-                _resolve_link(pdf, annot)
+                dests = dests or Destinations.of(pdf)  # 名稱樹每份文件只攤平一次
+                _resolve_link(dests, annot)
 
 
-def _resolve_link(pdf: pikepdf.Pdf, annot: pikepdf.Dictionary) -> None:
+def _resolve_link(dests: Destinations, annot: pikepdf.Dictionary) -> None:
     named_dest = isinstance(annot.get("/Dest"), (pikepdf.Name, pikepdf.String))
     action = annot.get("/A")
     named_action = (
@@ -79,7 +81,7 @@ def _resolve_link(pdf: pikepdf.Pdf, annot: pikepdf.Dictionary) -> None:
     )
     if not (named_dest or named_action):
         return
-    arr = explicit_dest(pdf, annot)
+    arr = explicit_dest(dests, annot)
     if arr is None:
         annot["/QSDrop"] = True
         return

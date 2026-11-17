@@ -158,10 +158,16 @@ def crop_box(page: pikepdf.Page | pikepdf.Dictionary) -> tuple[float, float, flo
 
 
 def _inherited(obj: pikepdf.Dictionary, key: str) -> Any:
+    """沿 /Parent 往上找繼承的值（記錄走過的物件、最多 32 層，繞圈的檔案也不會卡住）。"""
     current: Any = obj
+    seen: set[tuple[int, int]] = set()
     for _ in range(32):
         if current is None or not isinstance(current, pikepdf.Dictionary):
             return None
+        if current.is_indirect:
+            if current.objgen in seen:
+                return None
+            seen.add(current.objgen)
         if key in current:
             return current[key]
         current = current.get("/Parent")

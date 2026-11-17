@@ -17,8 +17,10 @@ from .common import crop_box
 
 log = logging.getLogger(__name__)
 
-MAX_DEPTH = 16
-MAX_SIBLINGS = 100_000
+MAX_DEPTH = 16  # 書籤最多幾層（原版上限）
+OUTLINE_BUDGET = 100_000  # 一份文件最多讀幾個書籤
+NAME_TREE_BUDGET = 10_000  # 名稱樹最多走幾個節點
+MAX_TREE_DEPTH = 32
 
 PageMap = Callable[[int], "int | None"]
 
@@ -37,24 +39,6 @@ class OutlineNode:
 # ---------------------------------------------------------------- 目的地解析
 
 
-def _name_tree_lookup(node: Any, key: bytes, depth: int = 0) -> Any:
-    if depth > 32 or not isinstance(node, pikepdf.Dictionary):
-        return None
-    names = node.get("/Names")
-    if isinstance(names, pikepdf.Array):
-        for i in range(0, len(names) - 1, 2):
-            k = names[i]
-            if isinstance(k, pikepdf.String) and bytes(k) == key:
-                return names[i + 1]
-    kids = node.get("/Kids")
-    if isinstance(kids, pikepdf.Array):
-        for kid in kids:
-            found = _name_tree_lookup(kid, key, depth + 1)
-            if found is not None:
-                return found
-    return None
-
-
 def _dest_array(value: Any) -> pikepdf.Array | None:
     if isinstance(value, pikepdf.Array):
         return value
@@ -64,26 +48,70 @@ def _dest_array(value: Any) -> pikepdf.Array | None:
     return None
 
 
-def resolve_named(pdf: pikepdf.Pdf, target: Any) -> pikepdf.Array | None:
-    """具名目的地（名稱或字串）→ 實際的目的地陣列；找不到回傳 None。"""
-    root = pdf.Root
-    if isinstance(target, pikepdf.Name):
-        dests = root.get("/Dests")
-        if isinstance(dests, pikepdf.Dictionary) and str(target) in dests:
-            found = _dest_array(dests[str(target)])
-            if found is not None:
-                return found
-        key = str(target)[1:].encode("utf-8")
-    elif isinstance(target, pikepdf.String):
-        key = bytes(target)
-    else:
-        return None
-    names = root.get("/Names")
-    tree = names.get("/Dests") if isinstance(names, pikepdf.Dictionary) else None
-    return _dest_array(_name_tree_lookup(tree, key))
+def _flatten_name_tree(tree: Any) -> dict[bytes, Any]:
+    """把名稱樹攤平成字典（只走一次）。
+
+    檔案內容不可信：記錄走過的物件（/Kids 互相參照或繞圈時不會重複走），
+    並限制節點總數與深度，避免惡意檔案讓查詢爆量。
+    """
+    out: dict[bytes, Any] = {}
+    seen: set[tuple[int, int]] = set()
+    stack: list[tuple[Any, int]] = [(tree, 0)]
+    budget = NAME_TREE_BUDGET
+    while stack and budget > 0:
+        node, depth = stack.pop()
+        if not isinstance(node, pikepdf.Dictionary) or depth > MAX_TREE_DEPTH:
+            continue
+        if node.is_indirect:
+            if node.objgen in seen:
+                continue
+            seen.add(node.objgen)
+        budget -= 1
+        names = node.get("/Names")
+        if isinstance(names, pikepdf.Array):
+            for i in range(0, min(len(names), 2 * NAME_TREE_BUDGET) - 1, 2):
+                k = names[i]
+                if isinstance(k, pikepdf.String) and bytes(k) not in out:
+                    out[bytes(k)] = names[i + 1]
+        kids = node.get("/Kids")
+        if isinstance(kids, pikepdf.Array):
+            stack.extend((kid, depth + 1) for kid in list(kids)[:NAME_TREE_BUDGET])
+    return out
 
 
-def explicit_dest(pdf: pikepdf.Pdf, item: pikepdf.Dictionary) -> pikepdf.Array | None:
+@dataclass(frozen=True)
+class Destinations:
+    """一份文件的具名目的地（名稱樹攤平一次，之後每個連結、書籤直接查表）。"""
+
+    names: dict[bytes, Any]
+    legacy: Any  # 舊式的 /Root /Dests 字典
+
+    @classmethod
+    def of(cls, pdf: pikepdf.Pdf) -> Destinations:
+        root = pdf.Root
+        names = root.get("/Names")
+        tree = names.get("/Dests") if isinstance(names, pikepdf.Dictionary) else None
+        legacy = root.get("/Dests")
+        return cls(
+            _flatten_name_tree(tree), legacy if isinstance(legacy, pikepdf.Dictionary) else None
+        )
+
+    def resolve(self, target: Any) -> pikepdf.Array | None:
+        """具名目的地（名稱或字串）→ 實際的目的地陣列；找不到回傳 None。"""
+        if isinstance(target, pikepdf.Name):
+            if self.legacy is not None and str(target) in self.legacy:
+                found = _dest_array(self.legacy[str(target)])
+                if found is not None:
+                    return found
+            key = str(target)[1:].encode("utf-8")
+        elif isinstance(target, pikepdf.String):
+            key = bytes(target)
+        else:
+            return None
+        return _dest_array(self.names.get(key))
+
+
+def explicit_dest(dests: Destinations, item: pikepdf.Dictionary) -> pikepdf.Array | None:
     """書籤或連結的目的地陣列（/Dest 或 GoTo 動作的 /D；具名的會解析）。"""
     target = item.get("/Dest")
     if target is None:
@@ -93,7 +121,7 @@ def explicit_dest(pdf: pikepdf.Pdf, item: pikepdf.Dictionary) -> pikepdf.Array |
     if target is None:
         return None
     if isinstance(target, (pikepdf.Name, pikepdf.String)):
-        return resolve_named(pdf, target)
+        return dests.resolve(target)
     return _dest_array(target)
 
 
@@ -129,62 +157,58 @@ def page_index_map(pdf: pikepdf.Pdf) -> dict[tuple[int, int], int]:
 # ---------------------------------------------------------------- 讀取
 
 
+@dataclass
+class _Walk:
+    """走訪書籤的狀態：走過的物件與剩下的節點預算（防止繞圈與爆量）。"""
+
+    index: dict[tuple[int, int], int]
+    mapping: PageMap
+    dests: Destinations
+    seen: set[tuple[int, int]] = field(default_factory=set)
+    budget: int = OUTLINE_BUDGET
+
+
 def read_outline(pdf: pikepdf.Pdf, mapping: PageMap) -> tuple[OutlineNode, ...]:
     """來源的書籤；mapping：來源頁索引 → 新頁索引（None＝不在新文件中，該書籤略過）。"""
     try:
         root = pdf.Root.get("/Outlines")
         if not isinstance(root, pikepdf.Dictionary):
             return ()
-        index = page_index_map(pdf)
-        return _children(pdf, root, index, mapping, 0, set())
+        walk = _Walk(page_index_map(pdf), mapping, Destinations.of(pdf))
+        return _children(walk, root, 0)
     except (pikepdf.PdfError, ValueError, TypeError, KeyError) as exc:
         log.warning("書籤讀取失敗，略過：%s", exc)
         return ()
 
 
-def _children(
-    pdf: pikepdf.Pdf,
-    parent: pikepdf.Dictionary,
-    index: dict[tuple[int, int], int],
-    mapping: PageMap,
-    depth: int,
-    seen: set[tuple[int, int]],
-) -> tuple[OutlineNode, ...]:
+def _children(walk: _Walk, parent: pikepdf.Dictionary, depth: int) -> tuple[OutlineNode, ...]:
     if depth >= MAX_DEPTH:
         return ()
     out: list[OutlineNode] = []
     item = parent.get("/First")
-    for _ in range(MAX_SIBLINGS):
-        if not isinstance(item, pikepdf.Dictionary):
-            break
+    while isinstance(item, pikepdf.Dictionary) and walk.budget > 0:
         if item.is_indirect:
-            if item.objgen in seen:
+            if item.objgen in walk.seen:
                 break
-            seen.add(item.objgen)
-        node = _node(pdf, item, index, mapping, depth, seen)
+            walk.seen.add(item.objgen)
+        walk.budget -= 1
+        node = _node(walk, item, depth)
         if node is not None:
             out.append(node)
         item = item.get("/Next")
     return tuple(out)
 
 
-def _node(
-    pdf: pikepdf.Pdf,
-    item: pikepdf.Dictionary,
-    index: dict[tuple[int, int], int],
-    mapping: PageMap,
-    depth: int,
-    seen: set[tuple[int, int]],
-) -> OutlineNode | None:
-    kids = _children(pdf, item, index, mapping, depth + 1, seen)
+def _node(walk: _Walk, item: pikepdf.Dictionary, depth: int) -> OutlineNode | None:
+    kids = _children(walk, item, depth + 1)
     title = str(item.get("/Title", ""))
     count = _number(item.get("/Count", 0)) or 0
     page = point = None
-    arr = explicit_dest(pdf, item)
+    arr = explicit_dest(walk.dests, item)
     if arr is not None and len(arr) > 0 and isinstance(arr[0], pikepdf.Dictionary):
-        src = index.get(arr[0].objgen) if arr[0].is_indirect else None
+        src = walk.index.get(arr[0].objgen) if arr[0].is_indirect else None
         if src is not None:
-            page = mapping(src)
+            page = walk.mapping(src)
             if page is not None:
                 point = dest_point(arr, arr[0])
     if page is None and not kids:
