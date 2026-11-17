@@ -12,6 +12,7 @@ import os
 import sys
 
 MODEL = "isnet-general-use"
+MAX_PIXELS = 16384 * 16384
 
 
 def _fail(message: str, code: int) -> int:
@@ -30,6 +31,8 @@ def main(argv: list[str]) -> int:
         from rembg import new_session, remove
     except ImportError as exc:
         return _fail(f"無法載入去背元件：{exc}", 3)
+    # 輸入已由主程式檢查過像素上限（16384 × 16384）；這裡用同一個上限
+    Image.MAX_IMAGE_PIXELS = MAX_PIXELS
     session = new_session(MODEL)
     for index in range(0, len(pairs), 2):
         src, dst = pairs[index], pairs[index + 1]

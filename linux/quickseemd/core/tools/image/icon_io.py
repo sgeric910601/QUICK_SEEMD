@@ -13,6 +13,7 @@ from pathlib import Path
 from PIL import Image
 
 from ... import errors
+from . import limits
 
 MAX_SIDE = 32768
 ICO_SIDES: tuple[int, ...] = (16, 32, 48, 64, 128, 256)
@@ -42,6 +43,7 @@ def resample(image: Image.Image, width: int, height: int, smooth: bool = True) -
         raise errors.QSError("輸出尺寸不正確。")
     if width > MAX_SIDE or height > MAX_SIDE:
         raise errors.QSError(f"輸出尺寸 {width} × {height} 太大（上限 {MAX_SIDE} px）。")
+    limits.check_pixels(width, height)
     method = Image.Resampling.LANCZOS if smooth else Image.Resampling.NEAREST
     return image.resize((width, height), method)
 
