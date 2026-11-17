@@ -379,3 +379,38 @@ def test_shutdown_cancels_running_job(setup, tmp_path, fake_tools):
     queue.run_action("other.zip", [f])
     queue.shutdown()
     assert jobs[0].cancelled
+
+
+def test_clipboard_text_from_result(setup, tmp_path, fake_tools):
+    queue, rec, jobs = setup
+    f = tmp_path / "a.png"
+    f.write_bytes(b"x")
+    queue.run_action("other.read-qr", [f])
+    jobs[0].done({"outputs": [str(tmp_path / "a-QR內容.txt")], "clipboard": "https://e.x"})
+    assert queue.items[0].clipboard == "https://e.x"
+    assert rec.finished[0].clipboard == "https://e.x"
+
+
+def test_clipboard_ignored_on_failure_or_bad_type(setup, tmp_path, fake_tools):
+    queue, rec, jobs = setup
+    f = tmp_path / "a.png"
+    f.write_bytes(b"x")
+    queue.run_action("other.read-qr", [f])
+    queue.run_action("other.read-qr", [f])
+    jobs[0].done({"error": "壞了", "clipboard": "x"})
+    jobs[1].done({"outputs": [], "clipboard": 42})
+    assert [i.clipboard for i in queue.items] == [None, None]
+
+
+def test_real_worker_returns_clipboard(tmp_path, fake_tools):
+    rec = Recorder()
+    queue = JobQueue(rec)
+    f = tmp_path / "碼.png"
+    f.write_bytes(b"x")
+    queue.run_action("other.read-qr", [f])
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and queue.items[0].status is Status.RUNNING:
+        time.sleep(0.05)
+    item = queue.items[0]
+    assert item.status is Status.DONE, item.reason
+    assert item.clipboard == "https://example.com/測試\n第二行"

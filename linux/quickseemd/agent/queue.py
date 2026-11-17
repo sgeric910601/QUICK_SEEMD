@@ -67,6 +67,7 @@ class QueueItem:
     message: str = ""
     outputs: tuple[Path, ...] = ()
     reason: str = ""
+    clipboard: str | None = None  # 工具要求拷貝到剪貼簿的文字（例如 QR Code 內容）
 
 
 class QueueObserver(Protocol):
@@ -343,7 +344,14 @@ def _apply_result(item: QueueItem, result: dict[str, Any]) -> QueueItem:
         reason = CANCELLED_REASON if result.get("cancelled") else str(error)
         return replace(item, status=Status.FAILED, reason=reason, progress=1.0)
     outputs = tuple(Path(p) for p in result.get("outputs") or [] if isinstance(p, str))
-    return replace(item, status=Status.DONE, outputs=outputs, progress=1.0)
+    clip = result.get("clipboard")
+    return replace(
+        item,
+        status=Status.DONE,
+        outputs=outputs,
+        progress=1.0,
+        clipboard=clip if isinstance(clip, str) else None,
+    )
 
 
 def _log_result(item: QueueItem) -> None:

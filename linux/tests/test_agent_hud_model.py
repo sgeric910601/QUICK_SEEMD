@@ -103,33 +103,6 @@ def test_rgb_hex():
     assert hm.rgb_hex((0.10, 0.60, 0.62)) == "#1a999e"
 
 
-def test_qr_payload_strips_headers():
-    text = "# a.png\nhttps://example.com\n第二行\n\n# b.png\nB 的內容\n"
-    assert hm.qr_payload(text) == "https://example.com\n第二行\nB 的內容"
-
-
-def test_qr_payload_single_file_without_header():
-    assert hm.qr_payload("只有一行\n") == "只有一行"
-
-
-def test_qr_clipboard_text_reads_output(tmp_path):
-    out = tmp_path / "a-QR內容.txt"
-    out.write_text("# a.png\nhello\n", "utf-8")
-    item = _item(status=Status.DONE, outputs=(out,), action_id="other.read-qr")
-    assert hm.qr_clipboard_text(item) == "hello"
-    other = _item(status=Status.DONE, outputs=(out,), action_id="other.zip")
-    assert hm.qr_clipboard_text(other) is None
-    missing = _item(status=Status.DONE, outputs=(tmp_path / "x.txt",), action_id="other.read-qr")
-    assert hm.qr_clipboard_text(missing) is None
-
-
-def test_qr_clipboard_text_ignores_huge_files(tmp_path):
-    out = tmp_path / "big.txt"
-    out.write_bytes(b"a" * (hm.QR_MAX_BYTES + 1))
-    item = _item(status=Status.DONE, outputs=(out,), action_id="other.read-qr")
-    assert hm.qr_clipboard_text(item) is None
-
-
 def test_file_summary():
     assert hm.file_summary(()) == "0 個檔案"
     assert hm.file_summary((Path("/x/y.pdf"),)) == "y.pdf"

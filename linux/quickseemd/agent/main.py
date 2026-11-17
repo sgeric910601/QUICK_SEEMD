@@ -21,11 +21,11 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from ..core import ipc, settings  # noqa: E402
 from ..core.wheel import WheelItem  # noqa: E402
-from . import hud_model, launcher  # noqa: E402
+from . import launcher  # noqa: E402
 from .clipboard import ClipboardOwner  # noqa: E402
 from .file_actions_ui import FileActionsUI  # noqa: E402
 from .hud import HudController, HudWindow  # noqa: E402
-from .queue import JobQueue, QueueItem  # noqa: E402
+from .queue import JobQueue, QueueItem, Status  # noqa: E402
 from .service import AgentService  # noqa: E402
 from .settings_watch import FileWatcher, changed_keys  # noqa: E402
 from .shelf import ShelfWindow  # noqa: E402
@@ -172,9 +172,9 @@ class AgentApp(Gtk.Application):
         launcher.spawn(argv, env)
 
     def _item_finished(self, item: QueueItem) -> None:
-        text = hud_model.qr_clipboard_text(item)
-        if text:
-            self.clipboard.set_text(text)
+        """工具要求拷貝的文字（例如 QR Code 內容）：背景程式一直在，剪貼簿就一直有效。"""
+        if item.status is Status.DONE and item.clipboard:
+            self.clipboard.set_text(item.clipboard)
 
     # ------------------------------------------------------------ 輪盤
 

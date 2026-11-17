@@ -2,7 +2,7 @@
 
 - other.compress：「壓縮成 ZIP」動作，很快地在原檔旁邊寫出 {檔名}.zip（內容只是文字）
 - image.rotate：「向右旋轉 90°」動作，一律失敗（測試失敗列）
-- other.read-qr：「讀取 QR Code」動作，寫出 {檔名}-QR內容.txt
+- other.read-qr：「讀取 QR Code」動作，寫出 {檔名}-QR內容.txt，並要求拷貝內容到剪貼簿
 - video.compress：「壓縮影片（建議）」動作，跑很久且會檢查取消（測試取消）
 """
 
@@ -50,7 +50,8 @@ def _fail(files, values, ctx):
 
 def _qr(files, values, ctx):
     f = files[0]
-    out = _write(ctx, f, ctx.output_name(f, "QR內容", "txt"), "# " + f.name + "\\n" + QR_TEXT + "\\n")
+    out = _write(ctx, f, ctx.output_name(f, "QR內容", "txt"), QR_TEXT + "\\n")
+    ctx.set_clipboard(QR_TEXT)
     ctx.progress(1.0, "找到 2 個，已複製到剪貼簿")
     return [out]
 

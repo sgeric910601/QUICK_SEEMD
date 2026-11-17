@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -10,15 +9,12 @@ from ..core import registry
 from ..core.model import RGB
 from .queue import QueueItem, Status
 
-log = logging.getLogger(__name__)
 
 HUD_WIDTH = 360
 HUD_MARGIN_RIGHT = 14
 HUD_MARGIN_TOP = 10
 HIDE_SECONDS = 7
 MAX_OPEN_OUTPUTS = 3
-QR_ACTION_ID = "other.read-qr"
-QR_MAX_BYTES = 1_000_000
 
 BUTTON_LABELS: dict[str, str] = {
     "reveal": "在資料夾中顯示",
@@ -83,32 +79,3 @@ def hud_origin(workarea: tuple[int, int, int, int], width: int) -> tuple[int, in
 
 def rgb_hex(rgb: RGB) -> str:
     return "#" + "".join(f"{int(round(min(max(c, 0.0), 1.0) * 255)):02x}" for c in rgb)
-
-
-def qr_payload(text: str) -> str:
-    """QR 結果檔 → 要放進剪貼簿的內容（去掉「# 檔名」標題與它前面的空行）。"""
-    lines = text.splitlines()
-    out: list[str] = []
-    for i, line in enumerate(lines):
-        if line.startswith("# "):
-            continue
-        if not line.strip() and i + 1 < len(lines) and lines[i + 1].startswith("# "):
-            continue
-        out.append(line)
-    return "\n".join(out).strip("\n")
-
-
-def qr_clipboard_text(item: QueueItem) -> str | None:
-    """「讀取 QR Code」成功後要複製的文字；不是這個動作或讀不到就回傳 None。"""
-    if item.action_id != QR_ACTION_ID or item.status is not Status.DONE or not item.outputs:
-        return None
-    out = item.outputs[0]
-    try:
-        if out.stat().st_size > QR_MAX_BYTES:
-            return None
-        text = out.read_text("utf-8", errors="replace")
-    except OSError as exc:
-        log.warning("讀不到 QR 結果檔：%s", exc)
-        return None
-    payload = qr_payload(text)
-    return payload or None
