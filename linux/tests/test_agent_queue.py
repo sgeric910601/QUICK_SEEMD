@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
-from agent_fakes import fake_tools  # noqa: F401 — pytest fixture
+from agent_fakes import fake_tools, no_tools  # noqa: F401 — pytest fixture
 
 from quickseemd.agent import queue as q
 from quickseemd.agent.queue import JobQueue, Status
@@ -87,7 +87,7 @@ def test_unknown_action_fails_with_original_text(setup, tmp_path):
     assert rec.events[-1] == "idle"
 
 
-def test_action_whose_tool_is_missing_is_unknown(setup, tmp_path):
+def test_action_whose_tool_is_missing_is_unknown(setup, tmp_path, no_tools):
     queue, rec, jobs = setup
     f = tmp_path / "a.pdf"
     f.write_text("x")

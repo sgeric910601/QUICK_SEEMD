@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import functools
+import importlib
 import sys
 from pathlib import Path
 
@@ -90,9 +92,22 @@ def write_fake_tools(directory: Path) -> Path:
     return path
 
 
+def _only(tools: tuple):
+    """取代 registry.all_tools：只回傳指定的工具（合併其他分類後測試結果也不變）。"""
+
+    @functools.lru_cache(maxsize=1)
+    def all_tools():
+        return tuple(tools)
+
+    return all_tools
+
+
 @pytest.fixture
 def fake_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """在這個測試裡登記假工具（本程序與工作程序都看得到），結束時還原。"""
+    """在這個測試裡只登記假工具（本程序與工作程序都看得到），結束時還原。
+
+    工作程序透過 QUICKSEEMD_EXTRA_TOOLS 載入假工具；同代碼的真工具會被假工具蓋過。
+    """
     from quickseemd.core import registry  # noqa: PLC0415
 
     mod_dir = tmp_path / "fake-tools"
@@ -100,8 +115,16 @@ def fake_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.syspath_prepend(str(mod_dir))
     monkeypatch.setenv("PYTHONPATH", str(mod_dir))
     monkeypatch.setenv("QUICKSEEMD_EXTRA_TOOLS", MODULE_NAME)
-    registry.reload()
-    yield mod_dir
-    monkeypatch.delenv("QUICKSEEMD_EXTRA_TOOLS")
-    registry.reload()
     sys.modules.pop(MODULE_NAME, None)
+    module = importlib.import_module(MODULE_NAME)
+    monkeypatch.setattr(registry, "all_tools", _only(tuple(module.TOOLS)))
+    yield mod_dir
+    sys.modules.pop(MODULE_NAME, None)
+
+
+@pytest.fixture
+def no_tools(monkeypatch: pytest.MonkeyPatch):
+    """這個測試裡一個工具都沒有。"""
+    from quickseemd.core import registry  # noqa: PLC0415
+
+    monkeypatch.setattr(registry, "all_tools", _only(()))
