@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from quickseemd.core import backends, errors
-from quickseemd.previewer import office
+from quickseemd.previewer import office, soffice_local
 
 FAKE_SOFFICE = """#!/usr/bin/python3
 import json, os, sys
@@ -36,6 +36,12 @@ if mode != "silent":
     with open(os.path.join(outdir, stem + ".pdf"), "xb") as out:
         out.write(b"%PDF-1.4 fake")
 """
+
+
+@pytest.fixture(autouse=True)
+def no_sandbox_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """假的 soffice 要讀寫 /tmp 底下的測試檔，預設不包 bwrap；真機測試另外指定。"""
+    monkeypatch.setattr(soffice_local, "sandbox_available", lambda: False)
 
 
 @pytest.fixture(autouse=True)
@@ -239,8 +245,6 @@ def test_profile_blocks_untrusted_links(tmp_path: Path, fake_soffice: Path, monk
 
 
 def test_profile_helper_never_overwrites(tmp_path: Path):
-    from quickseemd.previewer import soffice_local  # noqa: PLC0415
-
     profile = tmp_path / "profile"
     soffice_local.prepare_profile(profile)
     xcu = profile / "user" / "registrymodifications.xcu"
@@ -249,39 +253,133 @@ def test_profile_helper_never_overwrites(tmp_path: Path):
         soffice_local.prepare_profile(profile)
 
 
-def _odt_with_remote_image(path: Path, url: str) -> Path:
-    import zipfile  # noqa: PLC0415
-
-    content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
- xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
- xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
- xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"
- xmlns:xlink="http://www.w3.org/1999/xlink" office:version="1.2">
-<office:body><office:text><text:p>連結的圖片：
-<draw:frame draw:name="img" svg:width="4cm" svg:height="3cm" text:anchor-type="as-char">
-<draw:image xlink:href="{url}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>
-</draw:frame></text:p></office:text></office:body></office:document-content>"""
-    manifest = """<?xml version="1.0" encoding="UTF-8"?>
-<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">
-<manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/>
-<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
-</manifest:manifest>"""
-    with zipfile.ZipFile(path, "w") as z:
-        z.writestr(zipfile.ZipInfo("mimetype"), "application/vnd.oasis.opendocument.text")
-        z.writestr("META-INF/manifest.xml", manifest, compress_type=zipfile.ZIP_DEFLATED)
-        z.writestr("content.xml", content, compress_type=zipfile.ZIP_DEFLATED)
-    return path
+def test_registry_hardening_settings():
+    xml = soffice_local.registry_xml()
+    expected = [
+        ("/org.openoffice.Office.Common/Security/Scripting", "BlockUntrustedRefererLinks", "true"),
+        ("/org.openoffice.Office.Common/Security/Scripting", "DisableMacrosExecution", "true"),
+        ("/org.openoffice.Office.Common/Security/Scripting", "MacroSecurityLevel", "3"),
+        # Calc：0 一律更新、1 永不、2 詢問；Writer：0 永不、1 手動、2 自動
+        ("/org.openoffice.Office.Calc/Content/Update", "Link", "1"),
+        ("/org.openoffice.Office.Writer/Content/Update", "Link", "0"),
+        ("/org.openoffice.Office.Calc/Formula/Load", "OOXMLRecalcMode", "1"),
+        ("/org.openoffice.Office.Calc/Formula/Load", "ODFRecalcMode", "1"),
+    ]
+    for path, name, value in expected:
+        item = (
+            f'<item oor:path="{path}"><prop oor:name="{name}" oor:op="fuse">'
+            f"<value>{value}</value></prop></item>"
+        )
+        assert item in xml, name
 
 
-@pytest.mark.slow
-def test_real_libreoffice_does_not_fetch_linked_images(tmp_path: Path):
-    if backends.find("soffice") is None:
-        pytest.skip("沒有安裝 LibreOffice")
+def test_sandbox_prefix_limits_writes(tmp_path: Path):
+    profile, outdir, src = tmp_path / "p", tmp_path / "o", tmp_path / "文件.docx"
+    args = soffice_local.sandbox_prefix([profile, outdir], [src])
+    assert args[0] == soffice_local.BWRAP and args[-1] == "--"
+    joined = " ".join(args)
+    for flag in ("--unshare-net", "--die-with-parent", "--ro-bind / /", "--dev /dev"):
+        assert flag in joined
+    binds = [args[i + 1] for i, a in enumerate(args) if a == "--bind"]
+    assert binds == [str(profile), str(outdir)]
+    ro = [args[i + 1] for i, a in enumerate(args) if a == "--ro-bind"]
+    assert ro == ["/", str(src)]
+    # 私有的 /tmp 要在掛入輸入檔之前（後面的掛載才看得到）
+    assert args.index("/tmp") < args.index(str(src))
+    assert "DBUS_SESSION_BUS_ADDRESS" in args
+
+
+def test_wrap_without_sandbox_returns_command_unchanged(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(soffice_local, "sandbox_available", lambda: False)
+    argv = ["/usr/bin/soffice", "x"]
+    assert soffice_local.wrap(argv, [tmp_path], [tmp_path / "a"]) == argv
+
+
+def test_sandbox_probe_reports_missing_bwrap(monkeypatch, caplog):
+    monkeypatch.setattr(soffice_local, "BWRAP", "/nonexistent/bwrap")
+    soffice_local.probe_sandbox.cache_clear()
+    try:
+        with caplog.at_level("WARNING"):
+            assert soffice_local.probe_sandbox() is False
+        assert "bwrap" in caplog.text
+    finally:
+        soffice_local.probe_sandbox.cache_clear()
+
+
+def _bwrap_works() -> bool:
+    soffice_local.probe_sandbox.cache_clear()
+    ok = soffice_local.probe_sandbox()
+    soffice_local.probe_sandbox.cache_clear()
+    return ok
+
+
+@pytest.mark.skipif(not os.access(soffice_local.BWRAP, os.X_OK), reason="沒有 bwrap")
+def test_sandbox_really_has_no_network(tmp_path: Path):
+    if not _bwrap_works():
+        pytest.skip("這台電腦不能用 bwrap")
     from local_http import RecordingServer  # noqa: PLC0415
 
     with RecordingServer() as server:
-        doc = _odt_with_remote_image(tmp_path / "連結.odt", server.url("/image.png"))
-        pdf = office.convert_to_pdf(doc)
-        assert pdf.is_file()
+        code = (
+            "import sys, urllib.request\n"
+            "try:\n    urllib.request.urlopen(sys.argv[1], timeout=3)\n"
+            "except OSError:\n    sys.exit(7)\n"
+        )
+        argv = soffice_local.sandbox_prefix([tmp_path], []) + [
+            "/usr/bin/python3",
+            "-c",
+            code,
+            server.url("/probe"),
+        ]
+        res = office.process.run(argv, timeout=30)
+        assert res.returncode == 7
+        assert not server.touched
+
+
+def _leaky_documents(folder: Path, url) -> list[Path]:  # noqa: ANN001
+    import odf_samples as s  # noqa: PLC0415
+
+    ws = 'of:=COM.MICROSOFT.WEBSERVICE("{}")'.format(url("/webservice"))
+    ext = "of:=['{}'#$Sheet1.A1]".format(url("/external.ods"))
+    return [
+        s.odt_with_remote_image(folder / "連結圖片.odt", url("/image.png")),
+        s.ods_with_formula(folder / "網路服務.ods", ws, link_update_mode=2),
+        s.ods_with_formula(folder / "外部參照.ods", ext, link_update_mode=2),
+        s.ods_with_linked_sheet(folder / "連結工作表.ods", url("/linked.ods"), 2),
+    ]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("sandbox", [False, True], ids=["只靠設定", "加上bwrap"])
+def test_real_libreoffice_never_touches_the_network(tmp_path: Path, monkeypatch, sandbox: bool):
+    if backends.find("soffice") is None:
+        pytest.skip("沒有安裝 LibreOffice")
+    if sandbox and not _bwrap_works():
+        pytest.skip("這台電腦不能用 bwrap")
+    monkeypatch.setattr(soffice_local, "sandbox_available", lambda: sandbox)
+    from local_http import RecordingServer  # noqa: PLC0415
+
+    with RecordingServer() as server:
+        for doc in _leaky_documents(tmp_path, server.url):
+            pdf = office.convert_to_pdf(doc)
+            assert pdf.read_bytes().startswith(b"%PDF"), doc.name
         assert server.requests == []
+        assert server.connections == 0
+
+
+@pytest.mark.slow
+def test_control_plain_profile_does_fetch_linked_image(tmp_path: Path):
+    """對照組：沒有安全設定的設定檔真的會去抓圖片（證明測試抓得到問題）。"""
+    if backends.find("soffice") is None:
+        pytest.skip("沒有安裝 LibreOffice")
+    import odf_samples as s  # noqa: PLC0415
+    from local_http import RecordingServer  # noqa: PLC0415
+
+    with RecordingServer() as server:
+        doc = s.odt_with_remote_image(tmp_path / "連結.odt", server.url("/image.png"))
+        profile, outdir = tmp_path / "plain-profile", tmp_path / "out"
+        (profile / "user").mkdir(parents=True)
+        outdir.mkdir()
+        argv = soffice_local.convert_args(backends.require("soffice"), doc, profile, outdir)
+        office.process.run(argv, timeout=60)
+        assert server.touched

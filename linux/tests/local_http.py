@@ -1,4 +1,7 @@
-"""測試用的本機 HTTP 伺服器（只聽 127.0.0.1）：記錄收到的請求，用來證明預覽沒有連網。"""
+"""測試用的本機 HTTP 伺服器（只聽 127.0.0.1）：記錄所有連線與請求，用來證明預覽沒有連網。
+
+任何方法（GET、HEAD、PROPFIND…）都記錄；連線建立就算一次，即使沒有送出完整的請求。
+"""
 
 from __future__ import annotations
 
@@ -6,29 +9,55 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, owner: RecordingServer, handler: type) -> None:
+        self.owner = owner
+        super().__init__(("127.0.0.1", 0), handler)
+
+    def verify_request(self, request, client_address) -> bool:  # noqa: ANN001
+        self.owner.connections += 1
+        return True
+
+
+class _Handler(BaseHTTPRequestHandler):
+    server: _Server
+
+    def parse_request(self) -> bool:
+        ok = super().parse_request()
+        if getattr(self, "command", None):
+            self.server.owner.requests.append(f"{self.command} {self.path}")
+        return ok
+
+    def _reply(self) -> None:
+        body = b"#EXTM3U\n"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    do_GET = do_HEAD = do_POST = do_PROPFIND = do_OPTIONS = _reply  # noqa: N815
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
 class RecordingServer:
     def __init__(self) -> None:
         self.requests: list[str] = []
-        owner = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802 — http.server 規定的名稱
-                owner.requests.append(self.path)
-                body = b"#EXTM3U\n"
-                self.send_response(200)
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, *_args: object) -> None:
-                return
-
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.connections = 0
+        self._server = _Server(self, _Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     def url(self, path: str) -> str:
         host, port = self._server.server_address[:2]
         return f"http://{host}:{port}{path}"
+
+    @property
+    def touched(self) -> bool:
+        return bool(self.requests) or self.connections > 0
 
     def __enter__(self) -> RecordingServer:
         self._thread.start()
