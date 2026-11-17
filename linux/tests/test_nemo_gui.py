@@ -22,7 +22,8 @@ pytestmark = [pytest.mark.gui, pytest.mark.slow]
 
 @pytest.fixture(scope="module")
 def report(tmp_path_factory: pytest.TempPathFactory) -> dict:
-    s = make_session(tmp_path_factory.mktemp("nemo"))
+    # 這裡跑的是裝好的那份程式（不是原始碼），子程序不記錄覆蓋率
+    s = make_session(tmp_path_factory.mktemp("nemo"), coverage=False)
     env = s.env()
     env["TMPDIR"] = str(s.root)
     res = subprocess.run(
