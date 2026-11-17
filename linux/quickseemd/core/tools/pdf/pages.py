@@ -39,6 +39,12 @@ def _merge_note(values: Values, info: Info) -> tuple[str, bool] | None:
     return f"合併後共 {total} 頁。在左側拖曳檔案卡片即可調整順序。", False
 
 
+def _merge_placeholder(values: Values, info: Info) -> str:
+    """檔名欄位的預留文字：第一個檔案的檔名加「-已合併」（原版的寫法）。"""
+    first = str(info.get("first_base") or "").strip()
+    return f"{first}-已合併" if first else "檔名-已合併"
+
+
 def _merge_name(files: list[Path], name: str, ctx: ToolContext) -> str:
     trimmed = str(name or "").strip()
     if not trimmed:
@@ -135,6 +141,7 @@ MERGE = ToolDefinition(
             "檔名（可留白）",
             "",
             placeholder="檔名-已合併",
+            dynamic_placeholder=_merge_placeholder,
             group="輸出檔名",
             group_icon="pencil.line",
         ),

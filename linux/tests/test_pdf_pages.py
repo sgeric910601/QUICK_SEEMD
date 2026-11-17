@@ -298,3 +298,14 @@ def test_outputs_go_to_chosen_folder_and_leave_no_temp(tmp_path, outdir):
     assert merged.parent == outdir and parts.parent == outdir
     assert sorted(p.name for p in tmp_path.iterdir()) == ["a.pdf", "b.pdf", "out"]
     assert sorted(p.name for p in outdir.iterdir()) == ["a-已合併.pdf", "a-已拆分"]
+
+
+def test_merge_name_placeholder_follows_first_file(tmp_path):
+    a = make_pdf(tmp_path / "報告.pdf", pages=1)
+    b = make_pdf(tmp_path / "附件.pdf", pages=1)
+    t = tool("pdf.merge")
+    opt = t.option("name")
+    assert opt.placeholder == "檔名-已合併"
+    assert opt.dynamic_placeholder({}, t.inspect([a, b])) == "報告-已合併"
+    assert opt.dynamic_placeholder({}, {}) == "檔名-已合併"
+    assert opt.dynamic_placeholder({}, {"first_base": "  "}) == "檔名-已合併"
