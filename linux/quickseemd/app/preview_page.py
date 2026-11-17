@@ -57,6 +57,8 @@ def preview_error_text(error: str) -> str:
         return "預覽服務尚未安裝（請重新執行安裝程式）。"
     if "NoReply" in error or "Timeout" in error:
         return "預覽服務沒有回應。"
+    if "Could not connect" in error or "No such file" in error:
+        return "連不上工作階段的 D-Bus（訊息匯流排）。"
     return error
 
 
@@ -98,8 +100,7 @@ class PreviewPage(Gtk.Box):
         box.append(self.again)
         over = Gtk.Overlay(hexpand=True, vexpand=True)
         holder = vbox(0, box)
-        holder.add_css_class("qs-bg")
-        holder.add_css_class(css.tint_class(TINTS["slate"]))
+        holder.add_css_class(css.bg_class(TINTS["slate"]))
         over.set_child(holder)
         hint = drop_overlay()
         over.add_overlay(hint)

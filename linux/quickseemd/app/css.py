@@ -244,8 +244,6 @@ button.qs-card{sel}:hover {{ border: 1.5px solid {_rgba(rgb, 0.7)}; }}
 {sel} button.qs-addmore:hover {{ border-color: {c}; }}
 {sel} .qs-file-card:hover {{ border-color: {_rgba(rgb, 0.6)}; }}
 {sel} .qs-drop {{ border-color: {c}; background-color: {_rgba(rgb, 0.06)}; }}
-{sel}.qs-bg, {sel} .qs-bg {{ background-image: linear-gradient(to bottom, {_rgba(rgb, 0.07)},
-  alpha(white, 0) 320px); }}
 button.qs-pill{sel}.selected {{ background-color: {c}; color: white; border-color: transparent; }}
 {sel} .qs-org-cell.selected {{ background-color: {_rgba(rgb, 0.12)}; border: 2px solid {c}; }}
 {sel} .qs-range-length {{ color: {c}; }}
@@ -308,6 +306,16 @@ def tint_class(rgb: RGB) -> str:
     if name not in _STYLES.rules:
         _STYLES.add(name, _tint_rules(name, rgb))
     return name
+
+
+def bg_class(rgb: RGB) -> str:
+    """頁面上方淡淡的顏色漸層（只管背景，不影響裡面元件的顏色）。"""
+    name = f"qs-bg-{_hex(rgb)}"
+    css = (
+        f".{name} {{ background-image: linear-gradient(to bottom, {_rgba(rgb, 0.07)}, "
+        "alpha(white, 0) 320px); }"
+    )
+    return _STYLES.add(name, css)
 
 
 def tile_size_class(size: int) -> str:

@@ -63,10 +63,13 @@ class FileCard(Gtk.Box):
         self.append(over)
         name = label(path.name, "qs-semibold", xalign=0.5, wrap=True, lines=2, ellipsize="middle")
         name.set_justify(Gtk.Justification.CENTER)
+        name.set_max_width_chars(14)
         name.set_size_request(-1, 36)
         name.set_valign(Gtk.Align.START)
         self.append(name)
-        self.append(label(file_meta(path), "qs-small", "qs-dim", xalign=0.5, ellipsize="end"))
+        meta = label(file_meta(path), "qs-small", "qs-dim", xalign=0.5, ellipsize="end")
+        meta.set_max_width_chars(16)
+        self.append(meta)
 
 
 def add_more_card(on_click: Callable[[], None]) -> Gtk.Button:

@@ -127,7 +127,7 @@ class ToolPage(Gtk.Box):
         over = Gtk.Overlay(hexpand=True, vexpand=True)
         holder = Gtk.Box(hexpand=True, vexpand=True)
         if background:
-            holder.add_css_class("qs-bg")
+            holder.add_css_class(css.bg_class(self.tool.tint_rgb))
         holder.append(child)
         child.set_hexpand(True)
         over.set_child(holder)

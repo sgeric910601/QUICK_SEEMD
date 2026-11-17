@@ -61,7 +61,14 @@ class QuickSeemdApp(Adw.Application):
         args = list(cmdline.get_arguments() or [])[1:]
         req = parse_open_args(args, cmdline.get_cwd())
         win = self.ensure_window()
-        self.state.apply_route(routing.route_open(req, registry.all_tools()))
+        route = routing.route_open(req, registry.all_tools())
+        LOG.info(
+            "開啟請求：%s %s（%d 個檔案）",
+            route.kind,
+            route.tool.id if route.tool else "-",
+            len(route.files),
+        )
+        self.state.apply_route(route)
         win.present()
         return 0
 

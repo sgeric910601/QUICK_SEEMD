@@ -42,8 +42,11 @@ def tool_card(tool: ToolDefinition, on_click) -> Gtk.Button:  # noqa: ANN001
     tile = tool_tile(tool.icon, tool.tint_rgb, 46, tool.badge)
     tile.set_halign(Gtk.Align.START)
     box.append(tile)
-    box.append(label(tool.title, "qs-card-title", wrap=True))
+    title = label(tool.title, "qs-card-title", wrap=True)
+    title.set_max_width_chars(12)
+    box.append(title)
     sub = label(tool.subtitle, "qs-dim", "qs-normal", wrap=True, lines=3, ellipsize="end")
+    sub.set_max_width_chars(16)  # 自然寬度小一點，格線才排得下多欄
     box.append(sub)
     btn.set_child(box)
     btn.set_size_request(CARD_MIN_WIDTH, 168)
@@ -64,7 +67,6 @@ class HubPage(Gtk.Box):
         toolbar.set_top_bar_style(Adw.ToolbarStyle.FLAT)
         over = Gtk.Overlay(hexpand=True, vexpand=True)
         self.bg = Gtk.Box(hexpand=True, vexpand=True)
-        self.bg.add_css_class("qs-bg")
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, hexpand=True)
         scroll.set_child(
             Adw.Clamp(maximum_size=1240, tightening_threshold=1240, child=self._body())
@@ -105,9 +107,9 @@ class HubPage(Gtk.Box):
         self.title.set_label(routing.hub_title(category))
         self.subtitle.set_label(routing.hub_subtitle(category))
         for c in list(self.bg.get_css_classes()):
-            if c.startswith("qs-t-"):
+            if c.startswith("qs-bg-"):
                 self.bg.remove_css_class(c)
-        self.bg.add_css_class(css.tint_class(category.tint if category else CATEGORIES[0].tint))
+        self.bg.add_css_class(css.bg_class(category.tint if category else CATEGORIES[0].tint))
         self.rebuild()
 
     def _on_search(self, entry: Gtk.SearchEntry) -> None:

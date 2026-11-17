@@ -74,8 +74,7 @@ class ResultPage(Gtk.ScrolledWindow):
         if nxt:
             body.append(self._next(nxt, on_next))
         wrap = Gtk.Box(hexpand=True)
-        wrap.add_css_class("qs-bg")
-        wrap.add_css_class(css.tint_class(GREEN))
+        wrap.add_css_class(css.bg_class(GREEN))
         wrap.append(body)
         body.set_hexpand(True)
         self.set_child(wrap)
