@@ -158,3 +158,10 @@ def test_corrupt_plist_falls_back(tmp_path: Path) -> None:
     f.write_bytes(b"bplist00" + b"\xff" * 64)
     assert plist.to_xml(FileInfo.of(f)) is None
     assert engine.render(f).kind_label != "屬性列表 (plist)"
+
+
+def test_universal_binary_is_not_described_as_java(samples: Path) -> None:
+    html = engine.render(samples / "hello-binary").html
+    assert '<span class="chip ">Mach-O 二進位檔</span>' in html
+    assert '<div class="sub">Mach-O 二進位檔</div>' in html
+    assert "Java" not in html

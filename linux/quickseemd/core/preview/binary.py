@@ -260,6 +260,14 @@ def hex_section(data: bytes, title: str) -> str:
     )
 
 
+def _description(info: FileInfo, fmt_name: str | None) -> tuple[str, str | None]:
+    """（類型說明, 圖示用的 MIME）。通用 Mach-O 與 Java 類別檔的開頭相同（CAFEBABE），
+    系統的類型判斷會把前者當成 Java；檔頭辨識比較準，以它為準。"""
+    if fmt_name and fmt_name.startswith("Mach-O") and info.mime == "application/x-java":
+        return "Mach-O 二進位檔", "application/x-executable"
+    return info.kind_description, info.mime
+
+
 def render(info: FileInfo, head: bytes) -> Page:
     """二進位資訊頁。"""
     fmt_name, details = identify(head)
@@ -268,8 +276,8 @@ def render(info: FileInfo, head: bytes) -> Page:
     digest = sha256(info.path, info.size)
     if digest:
         rows.append(("SHA-256", digest))
-    description = info.kind_description
-    panel, atts = info_panel(info, rows, description)
+    description, icon_mime = _description(info, fmt_name)
+    panel, atts = info_panel(info, rows, description, icon_mime)
     page = Page(kind=fmt_name or "二進位檔", show_icon=False, size=(820, 640))
     page.chips = [Chip(description)]
     body = panel
