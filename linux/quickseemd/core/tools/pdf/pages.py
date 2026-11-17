@@ -342,6 +342,7 @@ SPLIT = ToolDefinition(
             2,
             minimum=1,
             maximum=9999,
+            dynamic_range=lambda v, i: (1, max(1, page_count_of(i) or 9999)),
             group="設定",
             group_icon="slider.horizontal.3",
             visible=_is_mode("every_n"),

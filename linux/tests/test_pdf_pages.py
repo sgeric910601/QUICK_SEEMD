@@ -282,3 +282,9 @@ def test_delete_validation():
     assert note({"pages": "9"}, info) == ("範圍不正確（共 3 頁）", True)
     assert note({"pages": "1"}, info) == ("共 3 頁", False)
     assert note({"pages": ""}, {}) is None
+
+
+def test_split_chunk_range_follows_page_count():
+    opt = tool("pdf.split").option("chunk")
+    assert opt.current_range({}, {"page_count": 7}) == (1, 7)
+    assert opt.current_range({}, {}) == (1, 9999)

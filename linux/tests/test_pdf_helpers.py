@@ -67,11 +67,7 @@ def tool(tool_id: str):
     return {t.id: t for t in TOOLS}[tool_id]
 
 
-def make_rich_pdf(path: Path, pages: int = 6) -> Path:
-    """有書籤、內部連結、具名目的地、頁碼標籤與結構樹的 PDF。"""
-    make_pdf(path, pages=pages)
-    pdf = pikepdf.open(path, allow_overwriting_input=True)
-    p = [pg.obj for pg in pdf.pages]
+def _add_outline(pdf: pikepdf.Pdf, p: list) -> None:
     # 書籤：「第一章」→ 第 1 頁（子書籤「1.1」→ 第 2 頁），「第二章」→ 最後一頁
     root = pdf.make_indirect(pikepdf.Dictionary(Type=Name.Outlines))
     ch1 = pdf.make_indirect(
@@ -87,6 +83,15 @@ def make_rich_pdf(path: Path, pages: int = 6) -> Path:
     ch2.Prev = ch1
     root.First, root.Last, root.Count = ch1, ch2, 3
     pdf.Root.Outlines = root
+
+
+def make_rich_pdf(path: Path, pages: int = 6) -> Path:
+    """有書籤、內部連結、具名目的地、頁碼標籤與結構樹的 PDF（至少 3 頁）。"""
+    assert pages >= 3
+    make_pdf(path, pages=pages)
+    pdf = pikepdf.open(path, allow_overwriting_input=True)
+    p = [pg.obj for pg in pdf.pages]
+    _add_outline(pdf, p)
     # 具名目的地 "end" → 最後一頁
     pdf.Root.Names = pikepdf.Dictionary(
         Dests=pikepdf.Dictionary(Names=[pikepdf.String("end"), [p[-1], Name.Fit]])
