@@ -1,0 +1,4 @@
+# QUICK_SEEMD 空白鍵預覽（install.sh 產生）：Nemo 按空白鍵時由 D-Bus 自動啟動
+[D-BUS Service]
+Name=org.nemo.Preview
+Exec=@PREVIEW_EXEC@

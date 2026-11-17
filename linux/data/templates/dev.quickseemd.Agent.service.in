@@ -1,0 +1,4 @@
+# QUICK_SEEMD 背景程式（install.sh 產生）：右鍵動作需要時由 D-Bus 自動啟動
+[D-BUS Service]
+Name=dev.quickseemd.Agent
+Exec=@AGENT_EXEC@
