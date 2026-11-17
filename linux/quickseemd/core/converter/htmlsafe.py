@@ -5,11 +5,12 @@ LibreOffice 匯入 HTML 時會去抓 <img>、<link>、CSS 的 url(…) 等資源
 1. 判斷編碼（BOM → <meta charset> → 自動偵測）並轉成 UTF-8；含 NUL 字元的直接拒絕。
 2. 用 html.parser 逐一讀出標籤與文字，再重新輸出（屬性值重新跳脫），不靠正規表示式切標籤。
 3. 會載入資源的寫法：
-   - data: 網址只留點陣圖（PNG、JPEG、GIF、WebP、BMP）：標示的類型與解出來的檔頭都要是點陣圖，
-     輸出時改用檔頭判斷出的類型；SVG 與其他類型一律封鎖；
+   - data: 網址只留點陣圖（PNG、JPEG、GIF、WebP、BMP）：標示的類型與檔頭都要是點陣圖，
+     而且要能用 Pillow 完整解碼；輸出的是重新編碼的 PNG／JPEG，絕不交出原本的位元組；
+     SVG 與其他類型一律封鎖；
    - 網址、//、絕對路徑、反斜線開頭的一律封鎖；
-   - 相對路徑用 realpath 解析，必須是基準資料夾裡、檔頭確實是點陣圖的檔案（大小有上限），
-     換成 data: 內嵌（不看副檔名）；
+   - 相對路徑用 realpath 解析，必須是基準資料夾裡、內容確實是點陣圖的檔案（大小有上限），
+     同樣重新編碼後以 data: 內嵌（不看副檔名）；
    - <link>、<base>、<script>、自動跳轉的 <meta>、註解、處理指令直接拿掉；on… 事件屬性拿掉；
    - <style> 與 style 屬性：@import 拿掉、url(…) 依上面規則處理；含 CSS 跳脫字元（\\）的整段丟棄。
 """
@@ -19,6 +20,7 @@ from __future__ import annotations
 import base64
 import codecs
 import html
+import io
 import os
 import re
 import stat
@@ -32,6 +34,8 @@ from . import textcodec
 MAX_INLINE_BYTES = 20 * 1024 * 1024
 # 只允許點陣圖：SVG 本身又能用 <image href="file://…"> 讀取別的檔案，一律不收
 RASTER_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"})
+PILLOW_FORMATS = frozenset({"PNG", "JPEG", "GIF", "WEBP", "BMP"})
+MAX_INLINE_PIXELS = 50_000_000  # 每張內嵌圖片的像素上限（共用上限之內再收緊）
 _DATA_URI = re.compile(r"(?i)^data:([a-z0-9.+-]+/[a-z0-9.+-]+)[;,]")
 URL_ATTRS = frozenset(
     {"src", "data", "poster", "background", "dynsrc", "lowsrc", "codebase", "archive"}
@@ -112,14 +116,40 @@ def sniff_raster(data: bytes) -> str | None:
     return None
 
 
+def _decoded_first_frame(data: bytes):  # noqa: ANN202 — PIL.Image.Image
+    """用 Pillow 完整解碼第一格（在共用的像素上限內）；不是點陣圖或解不開就回傳 None。"""
+    from ..tools.image import loader  # noqa: PLC0415
+
+    try:
+        with loader.open_checked(io.BytesIO(data)) as im:
+            if im.format not in PILLOW_FORMATS or im.width * im.height > MAX_INLINE_PIXELS:
+                return None
+            im.load()
+            alpha = im.mode in ("RGBA", "LA", "PA", "RGBa") or "transparency" in im.info
+            return im.convert("RGBA" if alpha else "RGB")
+    except Exception:  # noqa: BLE001 — 任何解碼問題（含像素上限）都當成不是可用的圖片，不放行
+        return None
+
+
 def raster_data_uri(data: bytes) -> str | None:
-    """內容確實是點陣圖時，回傳用偵測到的類型組成的 data: 網址。"""
-    if len(data) > MAX_INLINE_BYTES:
+    """檔頭是點陣圖、而且 Pillow 能完整解開時，回傳「重新編碼」後的 data: 網址。
+
+    絕不把原本的位元組交出去（PNG 檔頭後面接 SVG 這類混合檔也只會留下像素）：
+    有透明或原本是無損格式 → PNG；其他（照片）→ JPEG。
+    """
+    if len(data) > MAX_INLINE_BYTES or sniff_raster(data) is None:
         return None
-    mime = sniff_raster(data)
-    if mime is None:
+    img = _decoded_first_frame(data)
+    if img is None:
         return None
-    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+    out = io.BytesIO()
+    if img.mode == "RGBA" or sniff_raster(data) in ("image/png", "image/gif", "image/bmp"):
+        img.save(out, "PNG")
+        mime = "image/png"
+    else:
+        img.save(out, "JPEG", quality=90)
+        mime = "image/jpeg"
+    return f"data:{mime};base64,{base64.b64encode(out.getvalue()).decode('ascii')}"
 
 
 def _decode_data_uri(value: str) -> bytes | None:

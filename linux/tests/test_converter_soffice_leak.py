@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import tempfile
 import zipfile
 from collections.abc import Iterator
@@ -90,10 +91,15 @@ def _odt_with_svg(path: Path, secret: Path) -> Path:
 
 def test_htmlsafe_drops_svg_and_non_raster_data_uris(tmp_path: Path, secret_png: Path) -> None:
     svg_uri = "data:image/svg+xml;base64," + base64.b64encode(_svg(secret_png).encode()).decode()
-    raster = "data:image/png;base64,iVBORw0KGgo="
+    png, jpg = io.BytesIO(), io.BytesIO()
+    Image.new("RGB", (2, 2), "red").save(png, "PNG")
+    Image.new("RGB", (2, 2), "red").save(jpg, "JPEG")
+    raster = "data:image/png;base64," + base64.b64encode(png.getvalue()).decode()
+    photo = "data:image/jpeg;base64," + base64.b64encode(jpg.getvalue()).decode()
     markup = (
         f'<p><img src="{svg_uri}"><img src="{raster}"><img src="data:text/html,<b>x</b>">'
-        f'<img src="DATA:IMAGE/SVG+XML,<svg/>"><img src="data:image/jpeg;base64,/9j/">'
+        f'<img src="DATA:IMAGE/SVG+XML,<svg/>"><img src="{photo}">'
+        f'<img src="data:image/png;base64,iVBORw0KGgo=">'  # 只有檔頭：解不開，丟掉
         f'<svg><image href="{svg_uri}"/><image href="{raster}"/>'
         f'<use xlink:href="{secret_png.as_uri()}"/><image href="leak.svg"/></svg></p>'
     )
@@ -101,8 +107,9 @@ def test_htmlsafe_drops_svg_and_non_raster_data_uris(tmp_path: Path, secret_png:
     clean = htmlsafe.sanitize(markup, tmp_path)
     assert "svg+xml" not in clean.lower() and "text/html" not in clean
     assert "file:" not in clean and "leak.svg" not in clean
-    assert clean.count("data:image/png;base64,iVBORw0KGgo=") == 2
-    assert "data:image/jpeg;base64,/9j/" in clean
+    kinds = [mime for mime, _data in _data_uris(clean)]
+    assert kinds == ["image/png", "image/jpeg"]
+    assert clean.count('href="data:image/png;base64,') == 1  # SVG 裡的點陣圖 <image> 也重新編碼
 
 
 # ------------------------------------------------------------------ LibreOffice 沙箱
@@ -172,9 +179,14 @@ def test_missing_bwrap_warns_once(
 # ------------------------------------------------------------------ 依內容判斷點陣圖
 
 
-def test_raster_is_judged_by_content(tmp_path: Path, secret_png: Path) -> None:
-    import io
+def _data_uris(markup: str) -> list[tuple[str, bytes]]:
+    import re
 
+    found = re.findall(r'src="data:([a-z/]+);base64,([A-Za-z0-9+/=]+)"', markup)
+    return [(mime, base64.b64decode(body)) for mime, body in found]
+
+
+def test_raster_is_judged_by_content(tmp_path: Path, secret_png: Path) -> None:
     buf = io.BytesIO()
     Image.new("RGB", (3, 3), "blue").save(buf, "PNG")
     real_png = base64.b64encode(buf.getvalue()).decode()
@@ -188,8 +200,12 @@ def test_raster_is_judged_by_content(tmp_path: Path, secret_png: Path) -> None:
     )
     clean = htmlsafe.sanitize(markup, tmp_path)
     assert svg_b64 not in clean and "fake.png" not in clean and "svg" not in clean.lower()
-    # 標成 GIF 的 PNG 改用實際的類型；副檔名不對的 PNG 也照內容內嵌
-    assert clean.count(f'src="data:image/png;base64,{real_png}"') == 2
+    # 標成 GIF 的 PNG、副檔名不對的 PNG：都依內容解碼後重新編碼成 PNG 內嵌
+    embedded = _data_uris(clean)
+    assert len(embedded) == 2 and all(mime == "image/png" for mime, _ in embedded)
+    for _mime, data in embedded:
+        with Image.open(io.BytesIO(data)) as img:
+            assert img.size == (3, 3)
     assert "data:image/gif" not in clean
     assert "%89PNG" not in clean and "@@@" not in clean
     assert htmlsafe.sniff_raster(b"BM" + b"\x00" * 12 + (40).to_bytes(4, "little")) == "image/bmp"
@@ -217,3 +233,29 @@ def test_disguised_svgs_embed_nothing(tmp_path: Path, outdir: Path, secret_png: 
     with zipfile.ZipFile(docx) as z:
         media = [n for n in z.namelist() if "media/" in n]
     assert media == []
+
+
+def test_png_svg_polyglot_is_reencoded(tmp_path: Path, secret_png: Path) -> None:
+    """PNG 檔頭後面接 SVG：只留下重新編碼的像素，SVG 與它參照的檔案都不會出現。"""
+    buf = io.BytesIO()
+    Image.new("RGB", (5, 4), (1, 2, 3)).save(buf, "PNG")
+    polyglot = buf.getvalue() + _svg(secret_png).encode()
+    (tmp_path / "poly.png").write_bytes(polyglot)
+    uri = "data:image/png;base64," + base64.b64encode(polyglot).decode()
+    clean = htmlsafe.sanitize(f'<img src="poly.png"><img src="{uri}">', tmp_path)
+    embedded = _data_uris(clean)
+    assert len(embedded) == 2
+    for mime, data in embedded:
+        assert mime == "image/png" and data.startswith(b"\x89PNG")
+        assert b"svg" not in data and b"file:" not in data and secret_png.name.encode() not in data
+        with Image.open(io.BytesIO(data)) as img:
+            assert img.size == (5, 4) and img.convert("RGB").getpixel((0, 0)) == (1, 2, 3)
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(buf.getvalue()[:30])  # 檔頭對但解不開
+    assert _data_uris(htmlsafe.sanitize('<img src="broken.png">', tmp_path)) == []
+    photo = io.BytesIO()
+    Image.new("RGB", (6, 6), "white").save(photo, "WEBP")
+    webp = "data:image/webp;base64," + base64.b64encode(photo.getvalue()).decode()
+    assert [m for m, _ in _data_uris(htmlsafe.sanitize(f'<img src="{webp}">', tmp_path))] == [
+        "image/jpeg"
+    ]
