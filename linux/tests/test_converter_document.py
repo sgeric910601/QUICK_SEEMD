@@ -92,14 +92,50 @@ def test_plain_html_escapes_and_paginates() -> None:
     assert "<title>t&lt;</title>" in page
 
 
-def test_block_remote_references() -> None:
+def test_html_sanitizer_blocks_external_references(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from quickseemd.core.converter import htmlsafe
+
+    base = tmp_path / "site"
+    base.mkdir()
+    Image.new("RGB", (4, 4), "red").save(base / "ok.png")
+    (tmp_path / "secret.png").write_bytes(b"\x89PNG secret")
     markup = (
-        '<p><img src="https://x/y.png" alt="a"> <img src="local.png"></p><a href="http://x">l</a>'
+        '<html><head><base href="http://evil/"><meta http-equiv="refresh" content="0;url=http://x">'
+        '<link rel="stylesheet" href="http://evil/a.css">'
+        "<style>@import url(http://evil/b.css); p { background: url('http://evil/c.png') }</style>"
+        "</head><body>"
+        '<img src="ok.png"><img src="../secret.png"><img src="&#104;ttp://evil/d.png">'
+        '<img src=" http://evil/e.png" srcset="ok.png 1x, http://evil/f.png 2x">'
+        '<video poster="//evil/g.png"></video><table background="/etc/h.png"></table>'
+        '<p style="background:url(http://evil/i.png)">src="http://evil/text" 保留</p>'
+        '<object data="file:///etc/passwd"></object><embed src="http://evil/j"><iframe src="http://evil/k"></iframe>'
+        '<a href="http://example.com/">連結保留</a></body></html>'
     )
-    blocked = document.block_remote(markup)
-    assert 'data-blocked-src="https://x/y.png"' in blocked
-    assert '<img src="local.png">' in blocked
-    assert '<a href="http://x">' in blocked
+    clean = htmlsafe.block_remote(markup, base)
+    assert ' href="http://evil/a.css"' not in clean and "data-blocked-href=" in clean
+    for needle in ("evil/b.css", "evil/c.png", "evil/i.png"):  # @import 與 url() 整段拿掉
+        assert needle not in clean
+    assert "<base" not in clean and "refresh" not in clean
+    assert 'src="data:image/png;base64,' in clean
+    assert (
+        "secret" not in clean.split("data-blocked-src")[0]
+        or 'data-blocked-src="../secret.png"' in clean
+    )
+    assert 'data-blocked-src="../secret.png"' in clean
+    assert 'data-blocked-src="&#104;ttp://evil/d.png"' in clean
+    assert 'data-blocked-src=" http://evil/e.png"' in clean
+    assert "data-blocked-srcset=" in clean
+    assert "data-blocked-poster=" in clean and "data-blocked-background=" in clean
+    assert "data-blocked-data=" in clean
+    assert (
+        'data-blocked-src="http://evil/j"' in clean and 'data-blocked-src="http://evil/k"' in clean
+    )
+    assert 'src="http://evil/text" 保留' in clean  # 內文不動
+    assert '<a href="http://example.com/">' in clean
+    raw = htmlsafe.block_remote_bytes('<img src="http://x/y.png">中'.encode("cp950"), base)
+    assert raw.endswith("中".encode("cp950")) and b"data-blocked-src" in raw
 
 
 def test_pdf_to_html_text_only(pdf_file: Path, outdir: Path) -> None:
@@ -278,6 +314,10 @@ def test_pandoc_ast_sanitizer(tmp_path: Path) -> None:
     base = tmp_path / "doc"
     base.mkdir()
     (base / "ok.png").write_bytes(b"x")
+    (tmp_path / "secret.txt").write_text("SECRET")
+    (base / "link.png").symlink_to(tmp_path / "secret.txt")
+    resources = tmp_path / "res"
+    resources.mkdir()
 
     def image(url: str) -> dict:
         return {"t": "Image", "c": [["", [], []], [{"t": "Str", "c": "alt"}], [url, ""]]}
@@ -295,21 +335,57 @@ def test_pandoc_ast_sanitizer(tmp_path: Path) -> None:
                     image("ok.png"),
                     image("https://example.invalid/x.png"),
                     image("/etc/hosts"),
-                    image("../outside.png"),
+                    image("../secret.txt"),
+                    image("link.png"),
                     image("data:image/png;base64,AAAA"),
-                    {"t": "RawInline", "c": ["html", '<img src="http://x/y">']},
-                    {"t": "RawInline", "c": ["html", "<b>"]},
+                    {"t": "RawInline", "c": ["html", '<img src="../secret.txt">']},
+                    {"t": "RawInline", "c": ["latex", "\\textbf{x}"]},
                 ],
             },
-            {"t": "RawBlock", "c": ["html", '<iframe src="file:///etc/passwd"></iframe>']},
+            {"t": "RawBlock", "c": ["html", "<p>plain</p>"]},
         ],
     }
-    clean = pandocrun.clean_document(doc, [str(base)], str(base))
-    kinds = [n["t"] for n in clean["blocks"][0]["c"]]
-    assert kinds == ["Image", "Span", "Span", "Span", "Image", "Str", "RawInline"]
+    clean = pandocrun.Cleaner([base], base, resources).document(doc)
+    para = clean["blocks"][0]["c"]
+    assert [n["t"] for n in para] == [
+        "Image",
+        "Span",
+        "Span",
+        "Span",
+        "Span",
+        "Image",
+        "Str",
+        "RawInline",
+    ]
+    assert para[0]["c"][2][0] == "img-1.png" and (resources / "img-1.png").read_bytes() == b"x"
     assert clean["blocks"][1] == {"t": "Plain", "c": []}
     assert "cover-image" not in clean["meta"] and "title" in clean["meta"]
     assert doc["blocks"][0]["c"][1]["t"] == "Image"  # 原物件不變
+    keep = pandocrun.Cleaner([base], base, None).document(doc)
+    assert keep["blocks"][0]["c"][0]["c"][2][0] == "ok.png"  # 不內嵌的格式保留原路徑
+
+
+@pytest.mark.slow
+def test_epub_does_not_embed_files_outside_the_folder(tmp_path: Path, outdir: Path) -> None:
+    from PIL import Image
+
+    (tmp_path / "secret.txt").write_text("TOP-SECRET-CONTENT")
+    book = tmp_path / "book"
+    book.mkdir()
+    Image.new("RGB", (8, 8), "red").save(book / "ok.png")
+    (book / "sneaky.png").symlink_to(tmp_path / "secret.txt")
+    md = book / "notes.md"
+    md.write_text(
+        "# 標題\n\n![好](ok.png)\n\n![壞](../secret.txt)\n\n![連結](sneaky.png)\n\n"
+        '<img src="../secret.txt">\n\n<object data="../secret.txt"></object>\n',
+        "utf-8",
+    )
+    [epub] = run(md, "epub", outdir)
+    with zipfile.ZipFile(epub) as z:
+        blobs = [z.read(n) for n in z.namelist()]
+        names = z.namelist()
+    assert not any(b"TOP-SECRET-CONTENT" in b for b in blobs)
+    assert sum(1 for n in names if n.lower().endswith(".png")) == 1
 
 
 @pytest.mark.slow
@@ -324,3 +400,83 @@ def test_docx_to_markdown_with_pandoc(tmp_path: Path, outdir: Path) -> None:
     [md] = run(src, "md", outdir)
     text = md.read_text("utf-8")
     assert "# 標題" in text and "段落文字" in text
+
+
+def _recording_server():  # noqa: ANN202
+    import http.server
+    import threading
+
+    hits: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            hits.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"1,2\n")
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, hits
+
+
+def _spreadsheet_with_links(path: Path, port: int) -> Path:
+    path.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+        'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+        'xmlns:xlink="http://www.w3.org/1999/xlink" office:version="1.2" '
+        'office:mimetype="application/vnd.oasis.opendocument.spreadsheet">'
+        '<office:body><office:spreadsheet><table:table table:name="Sheet1"><table:table-row>'
+        f'<table:table-cell table:formula="of:=WEBSERVICE(&quot;http://127.0.0.1:{port}/ws&quot;)"'
+        ' office:value-type="string"><text:p>cached</text:p></table:table-cell>'
+        f"<table:table-cell table:formula=\"of:=['http://127.0.0.1:{port}/ext.ods']#$Sheet1.A1\""
+        ' office:value-type="float" office:value="1"><text:p>1</text:p></table:table-cell>'
+        '</table:table-row></table:table><table:table table:name="Linked">'
+        f'<table:table-source xlink:type="simple" xlink:href="http://127.0.0.1:{port}/linked.csv"'
+        ' table:filter-name="Text - txt - csv (StarCalc)" table:mode="copy-all"/>'
+        "<table:table-row><table:table-cell><text:p>old</text:p></table:table-cell>"
+        "</table:table-row></table:table></office:spreadsheet></office:body></office:document>",
+        "utf-8",
+    )
+    return path
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("sandbox", [True, False])
+def test_libreoffice_makes_no_requests(
+    tmp_path: Path, outdir: Path, monkeypatch: pytest.MonkeyPatch, sandbox: bool
+) -> None:
+    from quickseemd.core import soffice
+
+    if not sandbox:
+        monkeypatch.setattr(soffice, "sandbox_prefix", lambda _w: [])  # 只靠設定檔也要擋住
+    server, hits = _recording_server()
+    try:
+        port = server.server_address[1]
+        sheet = _spreadsheet_with_links(tmp_path / "links.fods", port)
+        soffice.convert(sheet, "pdf", tmp_path)
+        page = tmp_path / "page.html"
+        page.write_text(
+            f'<html><body><p>x</p><img src="http://127.0.0.1:{port}/img.png"></body></html>'
+        )
+        [docx] = run(page, "docx", outdir)
+        assert docx.exists()
+    finally:
+        server.shutdown()
+    assert hits == []
+
+
+@pytest.mark.slow
+def test_html_to_docx_embeds_local_images(tmp_path: Path, outdir: Path) -> None:
+    from PIL import Image
+
+    Image.new("RGB", (10, 10), "blue").save(tmp_path / "pic.png")
+    page = tmp_path / "p.html"
+    page.write_text('<html><body><p>圖</p><img src="pic.png"></body></html>', "utf-8")
+    [docx] = run(page, "docx", outdir)
+    assert any("media/" in n for n in zipfile.ZipFile(docx).namelist())
