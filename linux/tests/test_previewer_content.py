@@ -143,7 +143,7 @@ def test_special_file_never_reaches_engine(tmp_path: Path, engine: FakeEngine):
     ("kind", "words"),
     [
         (TargetKind.MISSING, "找不到"),
-        (TargetKind.REMOTE, "無法直接預覽"),
+        (TargetKind.REMOTE, "無法預覽這個位置"),
         (TargetKind.INVALID, "無法預覽"),
     ],
 )
@@ -155,9 +155,9 @@ def test_unavailable_targets(kind: TargetKind, words: str, engine: FakeEngine):
     assert engine.calls == []
 
 
-def test_remote_can_still_be_opened_with_default_app():
-    c = content.load(Target(TargetKind.REMOTE, "sftp://h/a.txt", "a.txt"))
-    assert c.can_open
+def test_unsupported_locations_cannot_be_opened_either():
+    """不支援的位置連「用預設程式開啟」都停用，完全不碰那個網址。"""
+    assert not content.load(Target(TargetKind.REMOTE, "http://h/a.txt", "a.txt")).can_open
     assert not content.load(Target(TargetKind.INVALID, "", "")).can_open
 
 

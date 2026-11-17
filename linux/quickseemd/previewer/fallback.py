@@ -119,8 +119,7 @@ def missing_page(name: str, path: Path | None) -> Document:
 
 
 def remote_page(name: str, uri: str) -> Document:
-    note = "這個位置無法直接預覽，請先把檔案拷貝到這台電腦。"
-    return info_page(name, [("位置", uri)], note=note)
+    return info_page(name, [("位置", uri)], note="無法預覽這個位置。")
 
 
 def invalid_page(name: str) -> Document:

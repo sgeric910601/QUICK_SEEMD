@@ -1,8 +1,9 @@
 """Nemo 傳來的網址 → 要預覽的目標。
 
+- 只接受 file://、trash://、recent://；其他網址（http、sftp、smb…）一律不碰，
+  連 Gio 都不交給它（GVfs 會連網），只顯示「無法預覽這個位置」。
 - file://：直接用路徑。
-- trash://、recent://：查 standard::target-uri 找到真正的檔案。
-- sftp:// 等遠端位置：有本機掛載路徑（gvfs-fuse）就用；沒有就只顯示資訊卡。
+- trash://、recent://：查 standard::target-uri 找到真正的檔案；指向的不是本機檔案也一樣不碰。
 - 不是一般檔案（管線、裝置、通訊端）只用 stat 判斷，絕不打開（打開管線會卡住）。
 """
 
@@ -19,6 +20,7 @@ from typing import Any
 from gi.repository import Gio, GLib
 
 MAX_URI_LENGTH = 65536
+ALLOWED_SCHEMES = frozenset({"file", "trash", "recent"})
 TARGET_URI_ATTRIBUTE = "standard::target-uri"
 _QUERY_ATTRIBUTES = f"{TARGET_URI_ATTRIBUTE},standard::display-name"
 
@@ -35,7 +37,7 @@ class TargetKind(Enum):
     FOLDER = "folder"  # 資料夾
     SPECIAL = "special"  # 管線、裝置等，只顯示資訊
     MISSING = "missing"  # 檔案不存在
-    REMOTE = "remote"  # 沒有本機路徑的遠端位置
+    REMOTE = "remote"  # 不支援的位置（其他網址、或指向網路的項目），完全不碰
     INVALID = "invalid"  # 網址格式不對
 
 
@@ -67,6 +69,7 @@ def _valid(uri: object) -> bool:
 
 
 def display_name(uri: str) -> str:
+    """只從網址文字取出顯示用的名稱（不碰檔案系統或網路）。"""
     tail = uri.rstrip("/").rsplit("/", 1)[-1]
     return GLib.uri_unescape_string(tail, None) or tail or uri
 
@@ -102,6 +105,8 @@ def resolve(uri: str, *, file_for_uri: FileFactory | None = None) -> Target:
     """把網址解析成預覽目標；任何錯誤都變成可以顯示的目標，不丟例外。"""
     if not _valid(uri):
         return Target(TargetKind.INVALID, uri if isinstance(uri, str) else "", "")
+    if (GLib.uri_parse_scheme(uri) or "").lower() not in ALLOWED_SCHEMES:
+        return Target(TargetKind.REMOTE, uri, display_name(uri))
     factory = file_for_uri or Gio.File.new_for_uri
     gfile = factory(uri)
     try:
