@@ -13,7 +13,7 @@ import pikepdf
 
 from ... import backends, errors
 from ...model import ToolContext
-from .common import visual_size
+from .common import crop_box, rotation
 
 log = logging.getLogger(__name__)
 
@@ -22,12 +22,12 @@ BLANK_DPI = 40
 BLANK_THRESHOLD = 235
 BLANK_RATIO = 0.002
 
-# pdftocairo 的輸出格式 → (參數, 副檔名)
-CAIRO_FORMATS: dict[str, tuple[str, str]] = {
-    "png": ("-png", "png"),
-    "jpg": ("-jpeg", "jpg"),
-    "tiff": ("-tiff", "tif"),
-}
+
+def page_points(page: pikepdf.Page) -> tuple[float, float]:
+    """poppler 繪製時的頁面大小（裁切框、已旋轉；和 Quartz 一樣不看 UserUnit）。"""
+    x0, y0, x1, y1 = crop_box(page)
+    w, h = x1 - x0, y1 - y0
+    return (h, w) if rotation(page) in (90, 270) else (w, h)
 
 
 def effective_dpi(size_pt: tuple[float, float], dpi: float) -> float:
@@ -42,25 +42,22 @@ def render_page(
     page_no: int,
     dpi: float,
     out_base: Path,
-    fmt: str = "png",
     *,
     gray: bool = False,
-    jpeg_quality: int | None = None,
-    password: str | None = None,
+    points: tuple[float, float] | None = None,
 ) -> Path:
-    """畫出第 page_no 頁（1 起算），回傳圖檔路徑。out_base 不含副檔名。"""
-    flag, ext = CAIRO_FORMATS[fmt]
-    args = [backends.require("pdftocairo"), flag, "-cropbox", "-singlefile"]
-    args += ["-r", f"{dpi:.4f}", "-f", str(page_no), "-l", str(page_no)]
+    """畫出第 page_no 頁（1 起算）成 PNG，回傳圖檔路徑。out_base 不含副檔名。
+
+    points：頁面大小（pt）。pdftocairo 換算像素時無條件進位，給了頁面大小就把解析度
+    微調成四捨五入後的像素數（與原版相同）。
+    """
+    args = [backends.require("pdftocairo"), "-png", "-cropbox", "-singlefile"]
+    args += _resolution_args(dpi, points) + ["-f", str(page_no), "-l", str(page_no)]
     if gray:
         args.append("-gray")
-    if jpeg_quality is not None and fmt == "jpg":
-        args += ["-jpegopt", f"quality={int(jpeg_quality)}"]
-    if password:
-        args += ["-upw", password]
     args += [str(Path(src).resolve()), str(out_base)]
     _run(ctx, args, "pdftocairo")
-    out = out_base.with_name(out_base.name + "." + ext)
+    out = out_base.with_name(out_base.name + ".png")
     if not out.is_file():
         raise errors.QSError(f"第 {page_no} 頁繪製失敗。")
     return out
@@ -72,6 +69,17 @@ def _run(ctx: ToolContext | None, args: list[str], name: str) -> str:
     if ctx is not None:
         return ctx.run_process(args, name).stdout
     return process.run_checked(args, name).stdout
+
+
+def _resolution_args(dpi: float, points: tuple[float, float] | None) -> list[str]:
+    if points is None:
+        return ["-r", f"{dpi:.4f}"]
+    out: list[str] = []
+    for flag, pt in (("-rx", points[0]), ("-ry", points[1])):
+        pt = max(pt, 1e-3)
+        px = max(1, round(pt * dpi / 72.0))
+        out += [flag, f"{(px - 0.5) * 72.0 / pt:.6f}"]
+    return out
 
 
 def page_texts(ctx: ToolContext | None, src: Path, first: int, last: int) -> list[str]:
@@ -120,6 +128,14 @@ def is_blank_page(
         return False
     if has_visible_annotations(page):
         return False
-    dpi = effective_dpi(visual_size(page), BLANK_DPI)
-    image = render_page(ctx, src, page_no, dpi, work / f"blank-{page_no}", "png", gray=True)
+    dpi = effective_dpi(page_points(page), BLANK_DPI)
+    image = render_page(
+        ctx,
+        src,
+        page_no,
+        dpi,
+        work / f"blank-{page_no}",
+        gray=True,
+        points=page_points(page),
+    )
     return is_blank_image(image)

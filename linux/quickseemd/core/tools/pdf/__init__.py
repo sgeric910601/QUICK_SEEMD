@@ -7,15 +7,19 @@ from __future__ import annotations
 
 from ...model import ToolDefinition
 from .compress import COMPRESS
+from .fromimages import FROM_IMAGES
 from .organize import ORGANIZE, ROTATE
 from .pages import DELETE_PAGES, MERGE, SPLIT
 from .security import METADATA, PROTECT, UNLOCK
 from .stamp import PAGE_NUMBERS, WATERMARK
+from .toimages import TO_IMAGES
 
 TOOLS: list[ToolDefinition] = [
     MERGE,
     SPLIT,
     COMPRESS,
+    TO_IMAGES,
+    FROM_IMAGES,
     ORGANIZE,
     DELETE_PAGES,
     ROTATE,
