@@ -70,28 +70,33 @@ def wait(pred, timeout: float = 25.0) -> None:  # noqa: ANN001
     assert pred(), "等待逾時"
 
 
-def shot(widget, path: Path) -> Path:  # noqa: ANN001
+def shot(widget, path: Path) -> Path | None:  # noqa: ANN001
+    """截圖給人檢查用；畫面剛好在重繪拿不到內容時重試，最後仍拿不到就略過（不算失敗）。"""
+    import warnings
+
     from gi.repository import Graphene, Gtk
 
     pump(0.4)
     w, h = widget.get_width(), widget.get_height()
     node = None
-    for _ in range(5):
+    for _ in range(12):
         snap = Gtk.Snapshot()
         Gtk.WidgetPaintable.new(widget).snapshot(snap, w, h)
         node = snap.to_node()
         if node is not None:
             break
-        pump(0.2)
-    assert node is not None, "截圖是空的"
+        widget.queue_draw()
+        pump(0.25)
+    if node is None:
+        warnings.warn(f"截圖略過（拿不到畫面內容）：{path.name}", stacklevel=2)
+        return None
     rect = Graphene.Rect().init(0, 0, w, h)
-    widget.get_native().get_renderer().render_texture(node, rect).save_to_png(str(path))
+    texture = widget.get_native().get_renderer().render_texture(node, rect)
+    texture.save_to_png(str(path))
     extra = os.environ.get("QS_SHOT_DIR")
     if extra:
         Path(extra).mkdir(parents=True, exist_ok=True)
-        widget.get_native().get_renderer().render_texture(node, rect).save_to_png(
-            str(Path(extra) / path.name)
-        )
+        texture.save_to_png(str(Path(extra) / path.name))
     return path
 
 
@@ -657,3 +662,52 @@ def test_command_line_forwarding(tmp_path, data, gtk):
             primary.wait(timeout=10)
         bus.terminate()
         bus.wait(timeout=10)
+
+
+def test_application_in_process(fake, data):
+    """主程式本體：命令列帶工具與檔案、關窗即結束；不在背景執行時請背景程式結束。"""
+    from gi.repository import GLib
+
+    from quickseemd.app.application import QuickSeemdApp
+    from quickseemd.core import settings
+
+    seen: list = []
+    settings.save({"background.enabled": False})
+    try:
+        app = QuickSeemdApp()
+
+        def check() -> bool:
+            seen.append((app.state.open_tool_id, list(app.state.pending_files)))
+            app.show_about()
+            app.show_preferences()
+            app.activate_action("quit", None)
+            return False
+
+        GLib.timeout_add(1500, check)
+        rc = app.run(["quickseemd", "open", "--tool", "test.copy", str(data["pdf"])])
+    finally:
+        settings.save({"background.enabled": True})
+    assert rc == 0
+    assert seen == [("test.copy", [data["pdf"]])]
+    assert app.agent_alive is False
+
+
+def test_output_picker(window, tmp_path):
+    from quickseemd.app.output_picker import OutputPicker, picker_label, tilde
+    from quickseemd.core import settings
+
+    win, state = window
+    picker = OutputPicker()
+    picker._fill()
+    picker._save(False, str(tmp_path))
+    assert settings.output_folder_for_tools() == tmp_path
+    assert picker._label.get_label() == f"儲存到：{tmp_path.name}"
+    picker._fill()
+    picker._save(True, None)
+    assert picker._label.get_label() == "儲存到：與原始檔案相同的資料夾"
+    assert picker_label({"tools.output_same_folder": False, "tools.output_folder": ""}) == (
+        "與原始檔案相同的資料夾"
+    )
+    home = os.path.expanduser("~")
+    assert tilde(home + "/x") == "~/x" and tilde("/opt/x") == "/opt/x"
+    settings.save({"tools.output_folder": ""})

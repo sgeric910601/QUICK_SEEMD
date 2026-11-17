@@ -14,7 +14,7 @@ from gi.repository import Gtk  # noqa: E402
 from ..core.options import Kind  # noqa: E402
 from . import options_model as om  # noqa: E402
 from .option_widgets import Control, ToggleControl, make_control  # noqa: E402
-from .widgets import hbox, label, sf_icon, vbox  # noqa: E402
+from .widgets import hbox, label, sf_icon_optional, vbox  # noqa: E402
 
 
 class _Section:
@@ -24,8 +24,9 @@ class _Section:
         self.lists: list[tuple[Gtk.ListBox, list[ToggleControl]]] = []
         if spec.title:
             head = hbox(6)
-            if spec.icon:
-                head.append(sf_icon(spec.icon, 16, "qs-dim"))
+            img = sf_icon_optional(spec.icon, 16, "qs-dim")
+            if img is not None:
+                head.append(img)
             head.append(label(spec.title, "qs-group-title"))
             self.box.append(head)
         current: tuple[Gtk.ListBox, list[ToggleControl]] | None = None

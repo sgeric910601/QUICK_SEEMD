@@ -123,67 +123,62 @@ class OrganizeView:
         btn.set_hexpand(True)
         return btn
 
+    def _pair(self, *items: tuple[str, str, object]) -> Gtk.Widget:
+        return hbox(8, *(self._action(t, i, fn) for t, i, fn in items))
+
     def _build_panel(self) -> Gtk.Widget:
-        box = vbox(20)
         self.stat_before = label("0", "qs-stat")
         self.stat_after = label("0", "qs-stat")
         stats = hbox(12, vbox(0, self.stat_before, label("原本頁數", "qs-small", "qs-dim")))
         stats.append(icon("go-next-symbolic", 16, "qs-dim"))
         stats.append(vbox(0, self.stat_after, label("整理後", "qs-small", "qs-dim")))
-        box.append(stats)
+        note = hbox(8, icon("dialog-information-symbolic", 16, "qs-dim"))
+        note.append(label(NOTE, "qs-small", wrap=True))
+        note.add_css_class("qs-note")
+        return vbox(20, stats, self._selection_group(), self._all_group(), note)
+
+    def _selection_group(self) -> Gtk.Widget:
+        """「已選取 N 頁」：向左轉／向右轉／刪除／取消選取。"""
         self.sel_title = label("", "qs-group-title")
         sel = vbox(8, hbox(6, icon("object-select-symbolic", 16, "qs-dim"), self.sel_title))
+        left, right = "object-rotate-left-symbolic", "object-rotate-right-symbolic"
         sel.append(
-            hbox(
-                8,
-                self._action(
-                    "向左轉", "object-rotate-left-symbolic", lambda: self._rotate_sel(-90)
-                ),
-                self._action(
-                    "向右轉", "object-rotate-right-symbolic", lambda: self._rotate_sel(90)
-                ),
+            self._pair(
+                ("向左轉", left, lambda: self._rotate_sel(-90)),
+                ("向右轉", right, lambda: self._rotate_sel(90)),
             )
         )
         sel.append(
-            hbox(
-                8,
-                self._action("刪除", "user-trash-symbolic", self._delete_sel),
-                self._action("取消選取", "window-close-symbolic", self._clear_sel),
+            self._pair(
+                ("刪除", "user-trash-symbolic", self._delete_sel),
+                ("取消選取", "window-close-symbolic", self._clear_sel),
             )
         )
         self.sel_group = sel
-        box.append(sel)
-        allp = vbox(
-            8,
-            hbox(6, icon("edit-copy-symbolic", 16, "qs-dim"), label("所有頁面", "qs-group-title")),
+        return sel
+
+    def _all_group(self) -> Gtk.Widget:
+        """「所有頁面」：全部旋轉、反轉順序、加入空白頁、還原所有變更。"""
+        head = hbox(
+            6, icon("edit-copy-symbolic", 16, "qs-dim"), label("所有頁面", "qs-group-title")
         )
+        allp = vbox(8, head)
+        left, right = "object-rotate-left-symbolic", "object-rotate-right-symbolic"
         allp.append(
-            hbox(
-                8,
-                self._action(
-                    "全部向左轉", "object-rotate-left-symbolic", lambda: self._rotate_all(-90)
-                ),
-                self._action(
-                    "全部向右轉", "object-rotate-right-symbolic", lambda: self._rotate_all(90)
-                ),
+            self._pair(
+                ("全部向左轉", left, lambda: self._rotate_all(-90)),
+                ("全部向右轉", right, lambda: self._rotate_all(90)),
             )
         )
         allp.append(
-            hbox(
-                8,
-                self._action("反轉順序", "view-sort-descending-symbolic", self._reverse),
-                self._action("加入空白頁", "document-new-symbolic", lambda: self._insert(None)),
+            self._pair(
+                ("反轉順序", "view-sort-descending-symbolic", self._reverse),
+                ("加入空白頁", "document-new-symbolic", lambda: self._insert(None)),
             )
         )
         self.reset_all = self._action("還原所有變更", "edit-undo-symbolic", self._reset)
         allp.append(self.reset_all)
-        box.append(allp)
-        note = hbox(
-            8, icon("dialog-information-symbolic", 16, "qs-dim"), label(NOTE, "qs-small", wrap=True)
-        )
-        note.add_css_class("qs-note")
-        box.append(note)
-        return box
+        return allp
 
     # ------------------------------------------------------------ 動作
 

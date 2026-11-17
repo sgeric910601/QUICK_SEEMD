@@ -21,7 +21,7 @@ from ..core.options import Choice, Kind, Option  # noqa: E402
 from ..core.pagerange import PLACEHOLDER as PAGE_PLACEHOLDER  # noqa: E402
 from . import css  # noqa: E402
 from . import options_model as om  # noqa: E402
-from .widgets import clear, hbox, icon, label, sf_icon, vbox  # noqa: E402
+from .widgets import clear, hbox, icon, label, sf_icon_optional, vbox  # noqa: E402
 
 LOG = logging.getLogger(__name__)
 TIME_HINT = "時間格式不正確，例如 1:05.5 或 65"
@@ -134,8 +134,9 @@ class CardsControl(Control):
         btn = Gtk.Button()
         btn.add_css_class("qs-choice-card")
         row = hbox(10)
-        if ch.icon:
-            row.append(sf_icon(ch.icon, 17, "qs-tinted"))
+        img = sf_icon_optional(ch.icon, 17, "qs-tinted")
+        if img is not None:
+            row.append(img)
         text = vbox(2)
         title = hbox(6, label(ch.title, "qs-semibold"))
         if ch.badge:

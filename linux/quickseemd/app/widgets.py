@@ -74,6 +74,13 @@ def sf_icon(symbol: str | None, size: int = 16, *classes: str) -> Gtk.Image:
     return icon(icons.icon_name(symbol), size, *classes)
 
 
+def sf_icon_optional(symbol: str | None, size: int = 16, *classes: str) -> Gtk.Image | None:
+    """選項與段落的小圖示：圖示對照表裡沒有的符號就不畫（不要用通用圖示充數）。"""
+    if not symbol or symbol not in icons.SF_TO_FREEDESKTOP:
+        return None
+    return sf_icon(symbol, size, *classes)
+
+
 def tool_tile(symbol: str, rgb: RGB, size: int, badge: str | None = None) -> Gtk.Widget:
     """彩色圓角方塊＋白色符號；size ≥ 34 時右下角顯示類型標籤（原版 ToolIcon）。"""
     box = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
