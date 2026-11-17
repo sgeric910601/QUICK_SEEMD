@@ -406,3 +406,53 @@ def test_agent_app_routes_requests(gtk, tmp_path, monkeypatch, fake_tools):
     app.queue.shutdown()
     app.shelf.clear()
     app.hud.hide_panel()
+
+
+def test_copy_path_with_newline_is_refused(gtk, tmp_path):
+    from gi.repository import Gdk  # noqa: PLC0415
+
+    from quickseemd.agent import file_actions_ui  # noqa: PLC0415
+    from quickseemd.agent.clipboard import ClipboardOwner  # noqa: PLC0415
+    from quickseemd.agent.queue import JobQueue  # noqa: PLC0415
+
+    owner = ClipboardOwner()
+    owner.set_text("原本的內容")
+    queue = JobQueue(Recorder())
+    ui = file_actions_ui.FileActionsUI(queue, Recorder(), owner)
+    bad = tmp_path / "a\nrm -rf ~.txt"
+    bad.write_text("x")
+    ui.perform("copy-path", [bad])
+    (item,) = queue.items
+    assert (item.title, item.message) == ("拷貝路徑", "有檔名包含控制字元，沒有拷貝。")
+    cb = gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+    assert cb.wait_for_text() == "原本的內容"
+    # 「拷貝」照樣可以（檔案網址已編碼），但不提供純文字路徑
+    ui.perform("copy", [bad])
+    assert queue.items[-1].title == "已拷貝"
+    assert cb.wait_for_text() is None
+    data = cb.wait_for_contents(Gdk.Atom.intern("x-special/gnome-copied-files", False))
+    assert data.get_data() == ("copy\n" + bad.as_uri()).encode()
+
+
+def test_tool_clipboard_text_is_cleaned(gtk, monkeypatch):
+    from gi.repository import Gdk  # noqa: PLC0415
+
+    from quickseemd.agent import main as agent_main  # noqa: PLC0415
+    from quickseemd.agent.clipboard import ClipboardOwner  # noqa: PLC0415
+    from quickseemd.agent.queue import QueueItem, Status  # noqa: PLC0415
+
+    app = agent_main.AgentApp()
+    app.clipboard = ClipboardOwner()
+    raw = "QR\x1b[0m\r\n第二行\x9b\t尾"
+    item = QueueItem(1, "QR", "link", (0, 0, 0), (), None, status=Status.DONE, clipboard=raw)
+    app._item_finished(item)
+    cb = gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+    assert cb.wait_for_text() == "QR[0m\n第二行\t尾"
+    app.clipboard.set_text("不變")
+    app._item_finished(
+        QueueItem(2, "t", "link", (0, 0, 0), (), None, status=Status.DONE, clipboard="\x1b\x07")
+    )
+    app._item_finished(
+        QueueItem(3, "t", "link", (0, 0, 0), (), None, status=Status.FAILED, clipboard="x")
+    )
+    assert cb.wait_for_text() == "不變"

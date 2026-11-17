@@ -249,6 +249,10 @@ class JobQueue:
             self._replace(replace(item, status=Status.FAILED, reason=CANCELLED_REASON))
 
     def dismiss(self, item_id: int) -> None:
+        """關掉一列（照原版）：只是不再顯示，執行中的工作照樣跑完、輸出照樣存好。
+
+        要停止工作請按「取消」；面板上兩個按鈕分開，關掉列不會意外丟掉做到一半的結果。
+        """
         self._items = [i for i in self._items if i.id != item_id]
         self._starters.pop(item_id, None)
         self._observer.queue_changed(self.items)
