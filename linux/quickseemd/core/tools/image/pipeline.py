@@ -45,7 +45,11 @@ def run_file(
 
 
 def deliver_frames(
-    frames: Sequence[Frame], source: Source, output: writer.Output, ctx: ToolContext, tag: str | None
+    frames: Sequence[Frame],
+    source: Source,
+    output: writer.Output,
+    ctx: ToolContext,
+    tag: str | None,
 ) -> Path:
     """寫到暫存區後交付（同名自動加編號，絕不覆蓋）。"""
     work = work_dir(ctx, source.path)

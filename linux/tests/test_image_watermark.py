@@ -21,7 +21,8 @@ def _plain(tmp_path, name="底圖.png", size=(400, 300), color=(40, 80, 120)):
 def _diff(a_path, b_path):
     with Image.open(a_path) as a, Image.open(b_path) as b:
         return np.abs(
-            np.asarray(a.convert("RGB"), dtype=np.int16) - np.asarray(b.convert("RGB"), dtype=np.int16)
+            np.asarray(a.convert("RGB"), dtype=np.int16)
+            - np.asarray(b.convert("RGB"), dtype=np.int16)
         ).sum(axis=2)
 
 
@@ -42,7 +43,9 @@ def test_default_text_bottom_right(tmp_path, outdir):
     assert xs.max() <= 400 - 12 + 6 and ys.max() <= 300 - 12 + 8  # 留邊約短邊 4%
 
 
-@pytest.mark.parametrize("pos,region", [(0, (slice(0, 100), slice(0, 200))), (4, (slice(100, 200), slice(100, 300)))])
+@pytest.mark.parametrize(
+    "pos,region", [(0, (slice(0, 100), slice(0, 200))), (4, (slice(100, 200), slice(100, 300)))]
+)
 def test_grid_positions(tmp_path, outdir, pos, region):
     src = _plain(tmp_path)
     outs, _ = run_tool("image.watermark", [src], outdir, position=pos)
@@ -107,7 +110,10 @@ def test_validation_and_missing_logo(jpg_file, outdir):
     d = t.defaults()
     assert t.validate([jpg_file], {**d, "text": "  "}, {}) == "請輸入浮水印文字"
     assert t.validate([jpg_file], {**d, "kind": "image"}, {}) == "請先選擇標誌圖片"
-    assert t.validate([jpg_file], {**d, "kind": "image", "logo": "/nope.png"}, {}) == "請先選擇標誌圖片"
+    assert (
+        t.validate([jpg_file], {**d, "kind": "image", "logo": "/nope.png"}, {})
+        == "請先選擇標誌圖片"
+    )
     assert t.validate([jpg_file], d, {}) is None
     with pytest.raises(errors.QSError, match="請先選擇標誌圖片"):
         run_tool("image.watermark", [jpg_file], outdir, kind="image")
@@ -128,6 +134,9 @@ def test_watermark_options_ui():
     assert t.option("logo_scale").display(20) == "圖寬 20%"
     assert not t.option("rotation_custom").is_visible(d, {})
     assert t.option("rotation_custom").is_visible({**d, "rotation": "custom"}, {})
-    assert t.option("tiled").note({**d, "tiled": True}, {}) == ("重複鋪滿整張圖片，較難被裁掉。", False)
+    assert t.option("tiled").note({**d, "tiled": True}, {}) == (
+        "重複鋪滿整張圖片，較難被裁掉。",
+        False,
+    )
     assert not t.option("position").is_visible({**d, "tiled": True}, {})
     assert not t.option("logo").is_visible(d, {})

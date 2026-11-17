@@ -91,7 +91,9 @@ def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
     tag = "已翻轉" if angle == 0 else "已旋轉"
 
     def output_for(source: pipeline.Source) -> writer.Output:
-        return writer.Output(source.preferred_format(), 0.92, writer.KEEP, keeps_alpha=source.has_alpha)
+        return writer.Output(
+            source.preferred_format(), 0.92, writer.KEEP, keeps_alpha=source.has_alpha
+        )
 
     def body(f: Path, sub: ToolContext) -> list[Path]:
         url = _lossless(f, op, tag, sub)

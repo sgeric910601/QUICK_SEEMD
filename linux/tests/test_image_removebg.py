@@ -61,7 +61,9 @@ def test_end_to_end_with_fake_engine(png_file, jpg_file, outdir, fake_engine):
     outs, _ = run_tool("image.remove-bg", [jpg_file], outdir, action="image.remove-bg-transparent")
     assert outs[0].name == "相片-去背.png"
     with Image.open(outs[0]) as im:
-        assert im.mode == "RGBA" and im.getpixel((5, 5))[3] == 0 and im.getpixel((200, 200))[3] == 255
+        assert (
+            im.mode == "RGBA" and im.getpixel((5, 5))[3] == 0 and im.getpixel((200, 200))[3] == 255
+        )
     outs, _ = run_tool("image.remove-bg", [jpg_file], outdir, background="white", format="jpeg")
     assert outs[0].name == "相片-去背.jpg"
     outs, _ = run_tool("image.remove-bg", [jpg_file], outdir, format="jpeg")
@@ -74,7 +76,9 @@ def test_end_to_end_with_fake_engine(png_file, jpg_file, outdir, fake_engine):
 def test_no_subject_skip(jpg_file, png_file, outdir, monkeypatch):
     monkeypatch.setattr(remove_bg, "make_masks", _fake_masks(None))
     monkeypatch.setattr(backends, "rembg_model_ready", lambda: True)
-    with pytest.raises(errors.QSError, match="在「相片.jpg」裡找不到明顯的主體（人物、動物或物品）。"):
+    with pytest.raises(
+        errors.QSError, match="在「相片.jpg」裡找不到明顯的主體（人物、動物或物品）。"
+    ):
         run_tool("image.remove-bg", [jpg_file], outdir)
     outs, ctx = run_tool("image.remove-bg", [jpg_file, png_file], outdir)
     assert outs == []

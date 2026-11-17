@@ -52,7 +52,9 @@ def _metadata_note(values: Values, info: Info) -> tuple[str, bool] | None:
 def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
     fid = str(values.get("format", "jpeg"))
     if fid in ("ico", "icns"):
-        icon = make_icon.IconOptions(output=fid, shape="original", padding=0, background=colors.CLEAR)
+        icon = make_icon.IconOptions(
+            output=fid, shape="original", padding=0, background=colors.CLEAR
+        )
         return per_file(files, ctx, lambda f, sub: [make_icon.make(f, icon, sub)])
     quality = float(values.get("quality", 0.9))
     background = color_value(values, "background", CUSTOM_BACKGROUND)

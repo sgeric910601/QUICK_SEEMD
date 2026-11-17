@@ -5,7 +5,15 @@ from __future__ import annotations
 import pytest
 from conftest import make_image
 from PIL import Image
-from test_image_kit import CAMERA_TAGS, digest, exiftool_json, run_tool, tag_names, tool, with_metadata
+from test_image_kit import (
+    CAMERA_TAGS,
+    digest,
+    exiftool_json,
+    run_tool,
+    tag_names,
+    tool,
+    with_metadata,
+)
 
 from quickseemd.core import backends, errors
 from quickseemd.core.tools.image import formats, metadata
@@ -41,7 +49,13 @@ def _leaks(path, mode):
 def photo(tmp_path):
     base = make_image(tmp_path / "base.jpg", size=(200, 100), quality=90)
     return with_metadata(
-        base, tmp_path / "旅行.jpg", *CAMERA_TAGS, *PRIVATE_EXTRA, "-Comment=secret", "-Orientation=6", "-n"
+        base,
+        tmp_path / "旅行.jpg",
+        *CAMERA_TAGS,
+        *PRIVATE_EXTRA,
+        "-Comment=secret",
+        "-Orientation=6",
+        "-n",
     )
 
 
@@ -153,7 +167,10 @@ def test_categories_and_inspect(photo):
     assert info["found"] == cats
     note = t.option("_found").note(t.defaults(), info)
     assert note == ("位置（GPS）、相機與鏡頭、拍攝時間、拍攝參數、作者與版權、編輯軟體", False)
-    assert t.option("_found").note(t.defaults(), {**info, "found": []}) == ("沒有找到相片資訊。", False)
+    assert t.option("_found").note(t.defaults(), {**info, "found": []}) == (
+        "沒有找到相片資訊。",
+        False,
+    )
     assert not t.option("_found").is_visible(t.defaults(), {"count": 2})
 
 

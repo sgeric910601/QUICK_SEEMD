@@ -62,7 +62,9 @@ def target_format(source: loader.Source, target: str) -> str:
     return "png" if source.has_alpha else "jpeg"
 
 
-def _encode(source: loader.Source, fid: str, level: str, strip: bool, tmp: Path, ctx: ToolContext) -> None:
+def _encode(
+    source: loader.Source, fid: str, level: str, strip: bool, tmp: Path, ctx: ToolContext
+) -> None:
     meta = writer.REMOVE_ALL if strip else writer.KEEP
     if fid == "png":
         written = palette.write(
@@ -83,9 +85,13 @@ def _encode(source: loader.Source, fid: str, level: str, strip: bool, tmp: Path,
     writer.write(frames, source, tmp, out, cancel=ctx.cancel_event)
 
 
-def _keep_original(file: Path, source: loader.Source, strip: bool, work: Path) -> tuple[Path, str, int]:
+def _keep_original(
+    file: Path, source: loader.Source, strip: bool, work: Path
+) -> tuple[Path, str, int]:
     """壓縮沒有變小：保留原始內容（需要時只移除相片資訊、不重新壓縮）。"""
-    ext = file.suffix.lstrip(".").lower() or (formats.get(source.format).ext if source.format else "img")
+    ext = file.suffix.lstrip(".").lower() or (
+        formats.get(source.format).ext if source.format else "img"
+    )
     original = source.file_size
     if strip:
         try:
@@ -171,7 +177,11 @@ OPTIONS: tuple[Option, ...] = (
                 "arrow.down.to.line.compact",
             ),
             Choice(
-                "recommended", "建議", "畫質與大小兼顧，肉眼幾乎看不出差別。", "hand.thumbsup", "推薦"
+                "recommended",
+                "建議",
+                "畫質與大小兼顧，肉眼幾乎看不出差別。",
+                "hand.thumbsup",
+                "推薦",
             ),
             Choice("light", "保留品質", "只做輕微、近乎無損的最佳化，縮小幅度較少。", "sparkles"),
         ),
@@ -215,7 +225,17 @@ TOOL = define(
     tint="excel",
     badge="IMG",
     action_title="壓縮圖片",
-    keywords=("compress", "optimize", "reduce", "smaller", "shrink", "壓縮", "縮小檔案", "最佳化", "減肥"),
+    keywords=(
+        "compress",
+        "optimize",
+        "reduce",
+        "smaller",
+        "shrink",
+        "壓縮",
+        "縮小檔案",
+        "最佳化",
+        "減肥",
+    ),
     options=OPTIONS,
     presets={"image.compress-recommended": {"level": "recommended"}},
 )

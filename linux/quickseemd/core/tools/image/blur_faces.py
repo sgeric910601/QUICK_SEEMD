@@ -73,7 +73,9 @@ def _pixelate(patch: Image.Image, centre: tuple[float, float], cell: float) -> I
     return Image.fromarray(np.clip(np.round(out), 0, 255).astype(np.uint8), patch.mode)
 
 
-def _effect(patch: Image.Image, style: str, size: float, strength: float, centre: tuple[float, float]) -> Image.Image:
+def _effect(
+    patch: Image.Image, style: str, size: float, strength: float, centre: tuple[float, float]
+) -> Image.Image:
     if style == "blur":
         return patch.filter(ImageFilter.GaussianBlur(size * (0.02 + 0.012 * strength)))
     if style == "pixelate":
@@ -124,7 +126,9 @@ def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
         sub.check_cancelled()
         sub.progress(0.5, f"找到 {len(boxes)} 張臉，處理中…")
         image = apply(source.image, boxes, values)
-        out = writer.Output(source.preferred_format(), 0.92, writer.KEEP, keeps_alpha=source.has_alpha)
+        out = writer.Output(
+            source.preferred_format(), 0.92, writer.KEEP, keeps_alpha=source.has_alpha
+        )
         url = pipeline.deliver_frames(
             [loader.Frame(image, 0.0)], source, out, sub, TAGS.get(style, "模糊臉部")
         )
@@ -214,9 +218,22 @@ TOOL = define(
     run,
     tint="slate",
     badge="IMG",
-    action_title=lambda v, i: {"blur": "模糊臉部", "pixelate": "加上馬賽克", "blackout": "遮住臉部"}.get(
-        str(v.get("style")), "模糊臉部"
+    action_title=lambda v, i: {
+        "blur": "模糊臉部",
+        "pixelate": "加上馬賽克",
+        "blackout": "遮住臉部",
+    }.get(str(v.get("style")), "模糊臉部"),
+    keywords=(
+        "blur face",
+        "anonymize",
+        "pixelate",
+        "mosaic",
+        "privacy",
+        "模糊",
+        "馬賽克",
+        "打碼",
+        "臉",
+        "隱私",
     ),
-    keywords=("blur face", "anonymize", "pixelate", "mosaic", "privacy", "模糊", "馬賽克", "打碼", "臉", "隱私"),
     options=OPTIONS,
 )

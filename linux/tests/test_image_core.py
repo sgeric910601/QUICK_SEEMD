@@ -298,7 +298,9 @@ def _private_leaks(path: Path, mode: str) -> list[str]:
         if group in ("File", "System", "ExifTool", "Composite", "SourceFile"):
             continue
         location = name.startswith("GPS") or name in ("City", "Location", "Sub-location")
-        private = group in ("XMP", "IPTC", "Photoshop") or "Comment" in name or "secret" in str(value)
+        private = (
+            group in ("XMP", "IPTC", "Photoshop") or "Comment" in name or "secret" in str(value)
+        )
         if location or private or (mode == writer.REMOVE_ALL and name == "Model"):
             bad.append(key)
     return bad

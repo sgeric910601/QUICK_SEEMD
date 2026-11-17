@@ -42,7 +42,13 @@ _TRANSPOSE: dict[int, Image.Transpose] = {
     7: Image.Transpose.TRANSVERSE,
     8: Image.Transpose.ROTATE_90,
 }
-_READ_ERRORS = (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError)
+_READ_ERRORS = (
+    UnidentifiedImageError,
+    OSError,
+    SyntaxError,
+    ValueError,
+    Image.DecompressionBombError,
+)
 
 
 @dataclass(frozen=True)
@@ -140,7 +146,9 @@ def pixel_size(path: str | Path) -> tuple[int, int] | None:
         try:
             with Image.open(p) as im:
                 w, h = im.size
-                orientation = exif_orientation(im) if im.format in ("JPEG", "MPO", "TIFF", "WEBP") else 1
+                orientation = (
+                    exif_orientation(im) if im.format in ("JPEG", "MPO", "TIFF", "WEBP") else 1
+                )
                 return (h, w) if orientation in _ROTATED_ORIENTATIONS else (w, h)
         except _READ_ERRORS:
             pass

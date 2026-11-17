@@ -132,7 +132,9 @@ def layout(items: list[Line]) -> str:
     out: list[str] = []
     last: Line | None = None
     for box in sorted(items, key=functools.cmp_to_key(_order)):
-        same_row = last is not None and abs(box.mid_y - last.mid_y) <= min(box.height, last.height) * 0.5
+        same_row = (
+            last is not None and abs(box.mid_y - last.mid_y) <= min(box.height, last.height) * 0.5
+        )
         if same_row and out:
             out[-1] += " " + box.text
         else:
@@ -171,7 +173,13 @@ def recognize(image: Image.Image, values: Values, work: Path, ctx: ToolContext) 
 # ---------------------------------------------------------------- 工具
 
 
-def _write(sections: list[tuple[str, str]], values: Values, headings: bool, for_input: Path, ctx: ToolContext) -> Path:
+def _write(
+    sections: list[tuple[str, str]],
+    values: Values,
+    headings: bool,
+    for_input: Path,
+    ctx: ToolContext,
+) -> Path:
     kind = str(values.get("output", "txt"))
     kind = kind if kind in OUTPUT_TITLES else "txt"
     tmp = pipeline.work_dir(ctx, for_input) / f"text.{kind}"

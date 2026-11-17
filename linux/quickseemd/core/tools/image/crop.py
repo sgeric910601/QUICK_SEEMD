@@ -86,7 +86,9 @@ def _clip(x0: int, y0: int, x1: int, y1: int, w: int, h: int) -> PixelRect:
     return (x0, y0, max(0, x1 - x0), max(0, y1 - y0))
 
 
-def _auto_rect(w: int, h: int, ratio: float, anchor: str, focus: tuple[float, float] | None) -> PixelRect:
+def _auto_rect(
+    w: int, h: int, ratio: float, anchor: str, focus: tuple[float, float] | None
+) -> PixelRect:
     cx, cy, cw, ch = _centered(ratio, w / h)
     rx, ry, rw, rh = cx * w, cy * h, cw * w, ch * h
     if anchor == "top":
@@ -136,17 +138,23 @@ def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
     rect = parse_rect(values.get("crop")) if len(files) == 1 else None
     if ratio_of(values.get("ratio")) is None and rect is None:
         raise errors.QSError(
-            "多張圖片請選擇裁剪比例（會從中間裁切）" if len(files) > 1 else "請拖曳裁剪框，選擇要保留的範圍"
+            "多張圖片請選擇裁剪比例（會從中間裁切）"
+            if len(files) > 1
+            else "請拖曳裁剪框，選擇要保留的範圍"
         )
     # 多張圖片時沒有框選範圍；單張未框選但有比例時從中間裁（原版的「重設裁剪框」）
     if len(files) == 1 and rect is None:
         values = {**values, "anchor": "center"}
 
     def output_for(source: pipeline.Source) -> writer.Output:
-        return writer.Output(source.preferred_format(), 0.92, writer.KEEP, keeps_alpha=source.has_alpha)
+        return writer.Output(
+            source.preferred_format(), 0.92, writer.KEEP, keeps_alpha=source.has_alpha
+        )
 
     def body(f: Path, sub: ToolContext) -> list[Path]:
-        return [pipeline.run_file(f, sub, "已裁剪", output_for, lambda im, _s: _crop(im, values, rect))]
+        return [
+            pipeline.run_file(f, sub, "已裁剪", output_for, lambda im, _s: _crop(im, values, rect))
+        ]
 
     return per_file(files, ctx, body)
 
@@ -191,7 +199,9 @@ OPTIONS: tuple[Option, ...] = (
         group_icon="aspectratio",
     ),
     dynamic_note(
-        "_ratio_hint", lambda v, i: (RATIOS.get(str(v.get("ratio")), RATIOS["free"])[1], False), group="比例"
+        "_ratio_hint",
+        lambda v, i: (RATIOS.get(str(v.get("ratio")), RATIOS["free"])[1], False),
+        group="比例",
     ),
     Option("crop", Kind.TEXT, "裁剪範圍", "", visible=lambda v, i: False),
     dynamic_note("_crop_size", _size_note, group="裁剪範圍", group_icon="crop", visible=_one),

@@ -43,7 +43,9 @@ def test_presets_png_and_heic(jpg_file, outdir):
     assert b"ftypheic" in outs[0].read_bytes()[:32]
 
 
-@pytest.mark.parametrize("fmt,pil", [("tiff", "TIFF"), ("gif", "GIF"), ("bmp", "BMP"), ("webp", "WEBP")])
+@pytest.mark.parametrize(
+    "fmt,pil", [("tiff", "TIFF"), ("gif", "GIF"), ("bmp", "BMP"), ("webp", "WEBP")]
+)
 def test_other_bitmap_targets(jpg_file, outdir, fmt, pil):
     outs, _ = run_tool("image.convert", [jpg_file], outdir, format=fmt)
     assert outs[0].suffix == "." + formats.get(fmt).ext
@@ -120,7 +122,10 @@ def test_convert_notes_and_visibility():
         False,
     )
     assert _note(t, "background", d, {"has_alpha": True}) is None
-    assert _note(t, "keep_metadata", {**d, "format": "gif"}) == ("GIF 格式無法保存相片資訊。", False)
+    assert _note(t, "keep_metadata", {**d, "format": "gif"}) == (
+        "GIF 格式無法保存相片資訊。",
+        False,
+    )
     hint = [o for o in t.options if o.key == "_format_hint"][0]
     assert hint.note(d, {})[0] == "最通用的相片格式，檔案小，不支援透明。"
 
@@ -193,4 +198,7 @@ def test_make_icon_padding_caption():
     t = tool("image.make-icon")
     d = t.defaults()
     assert t.option("padding").note(d, {}) == ("macOS 圖示建議留白約 10%。", False)
-    assert t.option("padding").note({**d, "shape": "circle"}, {}) == ("非正方形的圖片會置中。", False)
+    assert t.option("padding").note({**d, "shape": "circle"}, {}) == (
+        "非正方形的圖片會置中。",
+        False,
+    )

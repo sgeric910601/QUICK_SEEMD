@@ -84,7 +84,9 @@ def rtf_document(sections: Sequence[Section], headings: bool) -> str:
     for text, is_heading in _paragraphs(sections, headings):
         size = HEADING_PT * 2 if is_heading else BODY_PT * 2
         bold = "\\b " if is_heading else ""
-        body.append(f"{{\\pard\\sa{SPACE_AFTER_PT * 20}\\f0\\fs{size} {bold}{rtf_escape(text)}\\par}}\n")
+        body.append(
+            f"{{\\pard\\sa{SPACE_AFTER_PT * 20}\\f0\\fs{size} {bold}{rtf_escape(text)}\\par}}\n"
+        )
     return head + "".join(body) + "}\n"
 
 

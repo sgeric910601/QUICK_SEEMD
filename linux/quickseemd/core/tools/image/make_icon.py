@@ -160,7 +160,12 @@ OPTIONS: tuple[Option, ...] = (
             Choice("icns", "macOS 圖示", ".icns，16–1024 px", "macwindow", "ICNS"),
             Choice("ico", "Windows／網站圖示", ".ico，16–256 px（favicon）", "globe", "ICO"),
             Choice("iconset", "圖示組 .iconset", ".iconset 資料夾，可用 iconutil 轉換", "hammer"),
-            Choice("pngSet", "PNG 圖示組", "16–1024 px 各尺寸 PNG（含 Apple Touch）", "square.stack.3d.up"),
+            Choice(
+                "pngSet",
+                "PNG 圖示組",
+                "16–1024 px 各尺寸 PNG（含 Apple Touch）",
+                "square.stack.3d.up",
+            ),
         ),
         group="輸出",
         group_icon="app.badge",

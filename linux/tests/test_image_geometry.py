@@ -116,7 +116,9 @@ def test_resize_validation_and_prefill(jpg_file):
 
 
 def test_jpeg_rotate_right_is_lossless(tmp_path, outdir):
-    src = with_metadata(make_image(tmp_path / "a.jpg", quality=90), tmp_path / "相片.jpg", *CAMERA_TAGS)
+    src = with_metadata(
+        make_image(tmp_path / "a.jpg", quality=90), tmp_path / "相片.jpg", *CAMERA_TAGS
+    )
     before = digest(src)
     outs, _ = run_tool("image.rotate", [src], outdir, action="image.rotate-right")
     out = outs[0]
@@ -137,7 +139,12 @@ def test_jpeg_imperfect_size_falls_back(tmp_path, outdir):
 
 
 def test_jpeg_with_orientation_uses_pixels(tmp_path, outdir):
-    src = with_metadata(make_image(tmp_path / "a.jpg", size=(200, 100), quality=90), tmp_path / "o.jpg", "-Orientation=6", "-n")
+    src = with_metadata(
+        make_image(tmp_path / "a.jpg", size=(200, 100), quality=90),
+        tmp_path / "o.jpg",
+        "-Orientation=6",
+        "-n",
+    )
     outs, _ = run_tool("image.rotate", [src], outdir, angle=90)
     with Image.open(outs[0]) as im:
         assert im.size == (200, 100)  # 轉正後 100×200，再轉 90° 回到 200×100
@@ -146,7 +153,15 @@ def test_jpeg_with_orientation_uses_pixels(tmp_path, outdir):
 
 @pytest.mark.parametrize(
     "angle,fh,fv",
-    [(90, False, False), (270, False, False), (180, False, False), (0, True, False), (0, False, True), (90, True, False), (270, True, True)],
+    [
+        (90, False, False),
+        (270, False, False),
+        (180, False, False),
+        (0, True, False),
+        (0, False, True),
+        (90, True, False),
+        (270, True, True),
+    ],
 )
 def test_png_rotations_match_numpy(tmp_path, outdir, angle, fh, fv):
     rng = np.random.default_rng(3)

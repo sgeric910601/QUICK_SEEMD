@@ -59,7 +59,11 @@ def _write_exact(arr: np.ndarray, path: Path, params: dict[str, Any]) -> None:
 
 
 def _pngquant(
-    image: Image.Image, limit: int, path: Path, params: dict[str, Any], cancel: threading.Event | None
+    image: Image.Image,
+    limit: int,
+    path: Path,
+    params: dict[str, Any],
+    cancel: threading.Event | None,
 ) -> bool:
     exe = backends.find("pngquant")
     if exe is None:

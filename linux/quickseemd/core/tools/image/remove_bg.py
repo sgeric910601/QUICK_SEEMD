@@ -73,7 +73,9 @@ def crop_box(bounds: Bounds, size: tuple[int, int]) -> Bounds:
 # ---------------------------------------------------------------- 合成
 
 
-def composite(image: Image.Image, mask: Image.Image, backdrop: str, color: colors.Rgba) -> Image.Image:
+def composite(
+    image: Image.Image, mask: Image.Image, backdrop: str, color: colors.Rgba
+) -> Image.Image:
     rgba = image.convert("RGBA")
     if mask.size != rgba.size:
         mask = mask.resize(rgba.size, Image.Resampling.BILINEAR)
@@ -112,7 +114,9 @@ def _finish(f: Path, mask_path: Path, values: Values, ctx: ToolContext) -> Path:
         image = image.crop(crop_box(bounds, image.size))
     ctx.check_cancelled()
     transparent = backdrop == "transparent"
-    out = writer.Output(_output_format(values, transparent), 0.9, writer.KEEP, colors.WHITE, transparent)
+    out = writer.Output(
+        _output_format(values, transparent), 0.9, writer.KEEP, colors.WHITE, transparent
+    )
     return pipeline.deliver_frames([loader.Frame(image, 0.0)], source, out, ctx, "去背")
 
 
@@ -158,7 +162,9 @@ def validate(files: list[Path], values: Values, info: Info) -> str | None:
 def _format_choices(values: Values, info: Info) -> tuple[Choice, ...]:
     allowed = ("png", "heic") if values.get("background", "transparent") == "transparent" else None
     return tuple(
-        c for c in _FORMATS if (allowed is None or c.value in allowed) and formats.is_writable(c.value)
+        c
+        for c in _FORMATS
+        if (allowed is None or c.value in allowed) and formats.is_writable(c.value)
     )
 
 
@@ -169,7 +175,9 @@ OPTIONS: tuple[Option, ...] = (
         "新的背景",
         "transparent",
         (
-            Choice("transparent", "透明", "去背後可疊在任何設計上", "checkerboard.rectangle", "PNG"),
+            Choice(
+                "transparent", "透明", "去背後可疊在任何設計上", "checkerboard.rectangle", "PNG"
+            ),
             Choice("white", "白色", "商品照、證件照", "square"),
             Choice("custom", "自訂顏色", "換成任何單色背景", "paintpalette"),
             Choice("blur", "模糊背景", "像人像模式一樣淡化背景", "camera.aperture"),

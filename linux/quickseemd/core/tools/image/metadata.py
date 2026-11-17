@@ -113,7 +113,9 @@ _CATEGORIES: tuple[tuple[str, frozenset[str]], ...] = (
     ),
     (
         "作者與版權",
-        frozenset({"Creator", "Artist", "Copyright", "Rights", "By-line", "CopyrightNotice", "Author"}),
+        frozenset(
+            {"Creator", "Artist", "Copyright", "Rights", "By-line", "CopyrightNotice", "Author"}
+        ),
     ),
     ("編輯軟體", frozenset({"Software", "CreatorTool"})),
 )
@@ -228,9 +230,7 @@ def _pillow_tags(path: Path) -> dict[str, Any] | None:
 
 
 def _is_location(name: str) -> bool:
-    return (
-        name.startswith(("GPS", "LocationCreated", "LocationShown")) or name in _LOCATION_NAMES
-    )
+    return name.startswith(("GPS", "LocationCreated", "LocationShown")) or name in _LOCATION_NAMES
 
 
 def _entries(tags: dict[str, Any]) -> list[tuple[str, str]]:
@@ -320,7 +320,12 @@ def _strip_lossless(
 def _write_q(source: loader.Source, target: Path, out: writer.Output, q: float) -> int:
     target.unlink(missing_ok=True)
     frames = source.frames if out.format == "gif" else source.frames[:1]
-    writer.write(frames, source, target, writer.Output(out.format, q, out.metadata, keeps_alpha=out.keeps_alpha))
+    writer.write(
+        frames,
+        source,
+        target,
+        writer.Output(out.format, q, out.metadata, keeps_alpha=out.keeps_alpha),
+    )
     return target.stat().st_size
 
 

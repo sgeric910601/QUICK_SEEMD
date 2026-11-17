@@ -80,10 +80,14 @@ def _text_stamp(text: str, size: float, values: Values) -> tuple[Image.Image, tu
     return Image.alpha_composite(shadow, text_layer), (width, height)
 
 
-def _logo_stamp(logo: Image.Image, image_width: int, scale: float) -> tuple[Image.Image, tuple[float, float]]:
+def _logo_stamp(
+    logo: Image.Image, image_width: int, scale: float
+) -> tuple[Image.Image, tuple[float, float]]:
     lw = max(4.0, image_width * scale / 100)
     lh = lw * logo.height / max(logo.width, 1)
-    resized = logo.convert("RGBA").resize((max(1, round(lw)), max(1, round(lh))), Image.Resampling.LANCZOS)
+    resized = logo.convert("RGBA").resize(
+        (max(1, round(lw)), max(1, round(lh))), Image.Resampling.LANCZOS
+    )
     return resized, (lw, lh)
 
 
@@ -115,7 +119,9 @@ def angle_of(values: Values) -> float:
         return 0.0
 
 
-def _single(canvas: Image.Image, stamp: Image.Image, size: tuple[float, float], angle: float, pos: int) -> None:
+def _single(
+    canvas: Image.Image, stamp: Image.Image, size: tuple[float, float], angle: float, pos: int
+) -> None:
     rad = math.radians(angle)
     c, s = abs(math.cos(rad)), abs(math.sin(rad))
     bw, bh = size[0] * c + size[1] * s, size[0] * s + size[1] * c
@@ -127,7 +133,9 @@ def _single(canvas: Image.Image, stamp: Image.Image, size: tuple[float, float], 
     _paste(canvas, stamp.rotate(angle, Image.Resampling.BICUBIC, expand=True), cx, cy)
 
 
-def _tiled(canvas: Image.Image, stamp: Image.Image, size: tuple[float, float], angle: float) -> None:
+def _tiled(
+    canvas: Image.Image, stamp: Image.Image, size: tuple[float, float], angle: float
+) -> None:
     w, h = canvas.size
     short = min(w, h)
     step_x = size[0] + max(size[0] * 0.6, short * 0.08)
@@ -189,10 +197,14 @@ def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
         logo = loader.load(path).image
 
     def output_for(source: pipeline.Source) -> writer.Output:
-        return writer.Output(source.preferred_format(), 0.92, writer.KEEP, keeps_alpha=source.has_alpha)
+        return writer.Output(
+            source.preferred_format(), 0.92, writer.KEEP, keeps_alpha=source.has_alpha
+        )
 
     def body(f: Path, sub: ToolContext) -> list[Path]:
-        return [pipeline.run_file(f, sub, "浮水印", output_for, lambda im, _s: apply(im, values, logo))]
+        return [
+            pipeline.run_file(f, sub, "浮水印", output_for, lambda im, _s: apply(im, values, logo))
+        ]
 
     return per_file(files, ctx, body, skip_errors=False)
 

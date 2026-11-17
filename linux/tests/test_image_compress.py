@@ -47,7 +47,10 @@ def test_jpeg_recommended(tmp_path, outdir):
     assert out.name == "相片-已壓縮.jpg"
     assert out.stat().st_size < src.stat().st_size
     assert ctx.last_message.startswith("省下 ")
-    assert f"（{format_size(src.stat().st_size)} → {format_size(out.stat().st_size)}）" in ctx.last_message
+    assert (
+        f"（{format_size(src.stat().st_size)} → {format_size(out.stat().st_size)}）"
+        in ctx.last_message
+    )
     assert digest(src) == before
 
 
@@ -56,7 +59,9 @@ def test_never_larger_keeps_original(tmp_path, outdir):
     outs, ctx = run_tool("image.compress", [src], outdir, level="light")
     assert outs[0].name == "小-已壓縮.jpg"
     assert digest(outs[0]) == digest(src)
-    assert ctx.last_message == f"已是最精簡的大小，保留原始內容（{format_size(src.stat().st_size)}）"
+    assert (
+        ctx.last_message == f"已是最精簡的大小，保留原始內容（{format_size(src.stat().st_size)}）"
+    )
 
 
 def test_never_larger_with_strip_uses_stripped_copy(tmp_path, outdir):
