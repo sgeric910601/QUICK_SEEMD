@@ -16,7 +16,8 @@ from pathlib import Path
 from .. import backends, errors, naming
 from . import capabilities
 from .formats import LOSSY_IMAGE_IDS, Format
-from .profile import HEIF_EXTS, SVG_EXTS, Profile
+from ..tools.image import loader
+from .profile import SVG_EXTS, Profile
 
 log = logging.getLogger(__name__)
 
@@ -64,29 +65,20 @@ def scale_down(img, max_pixel: int | None):  # noqa: ANN001, ANN202
     return img.resize(size, Image.Resampling.LANCZOS)
 
 
-def _exif_bytes(img) -> bytes | None:  # noqa: ANN001
-    """EXIF 的副本（方向改成 1，因為像素已經轉正）；不改動原圖物件。"""
+def _exif_reset(raw: bytes | None) -> bytes | None:
+    """EXIF 的副本，方向改成 1（像素已經轉正）；壞掉的 EXIF 就不保留。"""
+    if not raw:
+        return None
     Image, _ = _pil()
     try:
-        source = img.getexif()
-        if not source:
+        exif = Image.Exif()
+        exif.load(raw)
+        if not exif:
             return None
-        copy = Image.Exif()
-        copy.load(source.tobytes())
-        copy[_EXIF_ORIENTATION] = 1
-        return copy.tobytes()
-    except Exception:  # noqa: BLE001 — 壞掉的 EXIF 就不保留
+        exif[_EXIF_ORIENTATION] = 1
+        return exif.tobytes()
+    except Exception:  # noqa: BLE001 — Pillow 對壞 EXIF 會丟各種例外
         return None
-
-
-def _clean_dpi(value: object) -> float:
-    """PNG 的解析度以「每公尺像素」儲存，換回 DPI 會變成 150.0124：接近整數時取整數。"""
-    try:
-        dpi = float(value or 72)
-    except (TypeError, ValueError):
-        return 72.0
-    nearest = round(dpi)
-    return float(nearest) if abs(dpi - nearest) < 0.05 else dpi
 
 
 def _raster_svg(path: Path, max_pixel: int | None) -> Loaded:
@@ -114,47 +106,47 @@ def _raster_svg(path: Path, max_pixel: int | None) -> Loaded:
     return Loaded(normalized_mode(img))
 
 
-def _decode_heif(path: Path, scratch: Path, ctx) -> Path:  # noqa: ANN001
-    out = Path(tempfile.mkdtemp(prefix=".heif-", dir=scratch)) / "decoded.png"
-    tool = backends.require("heif-convert")
-    ctx.run_process([tool, "--quiet", str(path), str(out)], "heif-convert")
-    if not out.exists():
-        produced = sorted(out.parent.glob("decoded*.png"))
-        if not produced:
-            raise errors.unreadable("無法解碼這張圖片。")
-        return produced[0]
-    return out
+def _frame(path: Path, max_pixel: int | None, index: int) -> Loaded:
+    """動畫（GIF／APNG／WebP）的第 index 格；共用的讀取器只會整批讀 GIF 的畫格。"""
+    Image, _ = _pil()
+    try:
+        with Image.open(path) as img:
+            img.seek(index)
+            duration = img.info.get("duration")
+            frame = img.copy()
+    except Exception as exc:  # noqa: BLE001 — Pillow 會丟各種例外
+        raise errors.unreadable(f"無法解碼這張圖片（{exc}）。") from exc
+    return Loaded(scale_down(normalized_mode(frame), max_pixel), duration_ms=duration)
+
+
+def _jpeg_mode(path: Path) -> str | None:
+    Image, _ = _pil()
+    try:
+        with Image.open(path) as img:
+            return img.mode if img.format == "JPEG" else None
+    except Exception:  # noqa: BLE001 — 讀不到就不直接內嵌
+        return None
 
 
 def load_image(
-    path: Path, scratch: Path, ctx, max_pixel: int | None, index: int = 0
-) -> Loaded:  # noqa: ANN001, E501
-    """開一張圖（第 index 格），轉正方向並依上限縮小。"""
-    ext = path.suffix[1:].lower()
-    if ext in SVG_EXTS:
+    path: Path, scratch: Path, ctx, max_pixel: int | None, index: int = 0  # noqa: ANN001, ARG001
+) -> Loaded:
+    """開一張圖（第 index 格），轉正方向並依上限縮小。
+
+    一般圖片（含 HEIC／AVIF、Pillow 讀不懂而 GdkPixbuf 讀得懂的格式）用共用的
+    tools/image/loader；SVG 依原版規則點陣化（最長邊至少 1024 px）。
+    """
+    if path.suffix[1:].lower() in SVG_EXTS:
         return _raster_svg(path, max_pixel)
-    source = _decode_heif(path, scratch, ctx) if ext in HEIF_EXTS else path
-    Image, ImageOps = _pil()
-    try:
-        with Image.open(source) as img:
-            if index:
-                img.seek(index)
-            fmt, mode = img.format, img.mode
-            duration = img.info.get("duration")
-            dpi = _clean_dpi((img.info.get("dpi") or (72, 72))[0])
-            icc = img.info.get("icc_profile")
-            orientation = img.getexif().get(_EXIF_ORIENTATION, 1)
-            exif = _exif_bytes(img)
-            rotated = orientation not in (0, 1)
-            oriented = ImageOps.exif_transpose(img) if rotated else img.copy()
-    except Exception as exc:  # noqa: BLE001 — Pillow 會丟各種例外
-        raise errors.unreadable(f"無法解碼這張圖片（{exc}）。") from exc
-    scaled = scale_down(normalized_mode(oriented), max_pixel)
+    if index:
+        return _frame(path, max_pixel, index)
+    src = loader.load(path)
+    scaled = scale_down(src.image, max_pixel)
     # 沒有轉向、沒有縮小的 JPEG 可以原封不動放進 PDF（不重新壓縮）
-    passthrough = fmt == "JPEG" and index == 0 and not rotated and mode in ("RGB", "L")
-    passthrough = passthrough and scaled.size == oriented.size
-    jpeg = source.read_bytes() if passthrough else None
-    return Loaded(scaled, float(dpi), duration, icc, exif, jpeg)
+    passthrough = src.format == "jpeg" and src.orientation in (0, 1) and scaled.size == src.size
+    jpeg = path.read_bytes() if passthrough and _jpeg_mode(path) in ("RGB", "L") else None
+    duration = int(round(src.frames[0].delay * 1000)) if src.frames[0].delay else None
+    return Loaded(scaled, src.dpi, duration, src.icc, _exif_reset(src.exif), jpeg)
 
 
 # ---------------------------------------------------------------- 寫入
