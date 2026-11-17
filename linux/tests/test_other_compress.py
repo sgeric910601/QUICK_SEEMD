@@ -313,3 +313,76 @@ def test_cancel(tmp_path):
         t.run([f], t.defaults(), ctx)
     ctx.cleanup()
     assert sorted(p.name for p in tmp_path.iterdir()) == ["a.txt"]
+
+
+def test_invalid_format(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_text("a")
+    with pytest.raises(errors.QSError) as exc:
+        _run([f], format="rar")
+    assert str(exc.value) == "不支援的壓縮格式：rar"
+
+
+def test_special_top_level_item_is_refused(tmp_path):
+    os.mkfifo(tmp_path / "pipe")
+    with pytest.raises(errors.QSError) as exc:
+        _run([tmp_path / "pipe"])
+    assert str(exc.value) == "無法讀取檔案內容：「pipe」不是一般的檔案或資料夾。"
+
+
+def test_unreadable_content(tmp_path, outdir):
+    root = tmp_path / "d"
+    root.mkdir()
+    secret = root / "secret.txt"
+    secret.write_text("s")
+    secret.chmod(0)
+    try:
+        with pytest.raises(errors.QSError) as exc:
+            _run([root], outdir)
+        assert str(exc.value) == "無法讀取檔案內容：沒有權限讀取「secret.txt」。"
+        assert list(outdir.iterdir()) == []
+    finally:
+        secret.chmod(0o644)
+
+
+def test_unreadable_folder(tmp_path, outdir):
+    root = tmp_path / "d"
+    (root / "locked").mkdir(parents=True)
+    (root / "locked").chmod(0)
+    try:
+        with pytest.raises(errors.QSError) as exc:
+            _run([root], outdir, format="tgz")
+        assert str(exc.value) == "無法讀取檔案內容：沒有權限讀取「locked」。"
+    finally:
+        (root / "locked").chmod(0o755)
+
+
+def test_missing_item(tmp_path):
+    with pytest.raises(errors.QSError) as exc:
+        _run([tmp_path / "gone.txt"])
+    assert str(exc.value) == "找不到檔案「gone.txt」，可能已被移動或刪除。"
+
+
+def test_repack_7z_to_zip(tmp_path, outdir):
+    from quickseemd.core import backends, process
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "x.txt").write_text("x")
+    archive = tmp_path / "pack.7z"
+    process.run_checked(
+        [
+            backends.require("bsdtar"),
+            "-cf",
+            str(archive),
+            "--format",
+            "7zip",
+            "-C",
+            str(src),
+            "x.txt",
+        ],
+        "bsdtar",
+    )
+    [out], _ = _run([archive], outdir)
+    assert out == outdir / "pack.zip"
+    assert _zip_names(out) == ["x.txt"]

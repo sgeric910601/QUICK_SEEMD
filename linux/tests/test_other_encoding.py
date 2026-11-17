@@ -188,3 +188,19 @@ def test_large_file_skips_offer_check(tmp_path, outdir, monkeypatch):
     src = _write(tmp_path / "a.txt", "已經是 UTF-8\n".encode())
     [out] = _run([src], "utf8", outdir)
     assert out.read_text("utf-8") == "已經是 UTF-8\n"
+
+
+def test_unknown_target(tmp_path):
+    src = _write(tmp_path / "a.txt", b"abc\n")
+    with pytest.raises(errors.QSError) as exc:
+        _run([src], "ebcdic")
+    assert str(exc.value) == "「a.txt」無法轉換成 ebcdic。"
+
+
+def test_korean_and_japanese_to_utf8(tmp_path, outdir):
+    kr = "이것은 한국어 테스트 파일입니다. 오늘 날씨가 좋네요.\n"
+    jp = "これは日本語のテストファイルです。今日は天気がいいですね。\n"
+    a = _write(tmp_path / "kr.txt", kr.encode("euc_kr"))
+    b = _write(tmp_path / "jp.txt", jp.encode("cp932"))
+    outs = _run([a, b], "utf8", outdir)
+    assert [o.read_text("utf-8") for o in outs] == [kr, jp]

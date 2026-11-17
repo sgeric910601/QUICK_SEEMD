@@ -273,7 +273,11 @@ def test_tar_family(indir, outdir, name, mode):
 
 @pytest.mark.parametrize(
     ("name", "compress"),
-    [("data.csv.gz", gzip.compress), ("data.csv.bz2", bz2.compress), ("data.csv.xz", lzma.compress)],
+    [
+        ("data.csv.gz", gzip.compress),
+        ("data.csv.bz2", bz2.compress),
+        ("data.csv.xz", lzma.compress),
+    ],
 )
 def test_single_compressed_file(indir, name, compress):
     payload = b"a,b\n1,2\n" * 1000
@@ -361,7 +365,14 @@ def test_no_external_tool(indir, monkeypatch):
 
 @pytest.mark.parametrize(
     "bad",
-    ["../evil.txt", "/evil.txt", "a/../../evil.txt", "..\\evil.txt", "C:/evil.txt", "ok/../../evil"],
+    [
+        "../evil.txt",
+        "/evil.txt",
+        "a/../../evil.txt",
+        "..\\evil.txt",
+        "C:/evil.txt",
+        "ok/../../evil",
+    ],
 )
 def test_zip_slip_refused(indir, outdir, tmp_path, bad):
     z = _zip(indir / "bad.zip", {"fine.txt": "ok", bad: "evil"})
@@ -431,3 +442,285 @@ def test_7z_absolute_symlink_refused_via_7z(indir, outdir, tmp_path, monkeypatch
     monkeypatch.setattr(backends, "find", lambda k: None if k == "bsdtar" else real_find(k))
     msg = _run_refused(archive, outdir, tmp_path)
     assert UNSAFE_PREFIX in msg or "7-Zip" in msg
+
+
+# ------------------------------------------------------------------ 連結串接、衝突與其他邊界
+
+
+def test_zip_symlink_chain_escape_refused(indir, outdir, tmp_path):
+    """l1 → .、l2 → l1/..：文字上看似在裡面，實際指到外面；建立後的檢查要擋下。"""
+    z = indir / "bad.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        for name, target in (("l1", "."), ("l2", "l1/..")):
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zf.writestr(info, target)
+    assert UNSAFE_PREFIX in _run_refused(z, outdir, tmp_path)
+
+
+def _run_contained(archive: Path, out: Path, tmp_path: Path) -> None:
+    """執行（可能成功也可能被拒絕），確認沒有任何「evil」檔案出現在輸出資料夾以外、
+    解出來的符號連結也都指在輸出的項目裡面。"""
+    t = _tool()
+    ctx = ToolContext(out)
+    try:
+        try:
+            outputs = t.run([archive], t.defaults(), ctx)
+        except errors.QSError as exc:
+            assert UNSAFE_PREFIX in str(exc)
+            outputs = []
+        roots = [tmp_path, Path(os.environ["XDG_CACHE_HOME"])]
+        leaked = [p for r in roots for p in r.rglob("*evil*") if out not in p.parents]
+        assert leaked == []
+        for o in outputs:
+            real_out = os.path.realpath(o)
+            for p in [o, *o.rglob("*")] if o.is_dir() else [o]:
+                if p.is_symlink():
+                    assert os.path.realpath(p).startswith(real_out)
+    finally:
+        ctx.cleanup()
+
+
+def test_tar_symlink_chain_stays_inside(indir, outdir, tmp_path):
+    """tar 的 data 篩選器會把連結目標正規化（l1/.. → .）或拒絕；兩種結果都不能跑到外面。"""
+    members = [_member("l1", tarfile.SYMTYPE, "."), _member("l2", tarfile.SYMTYPE, "l1/..")]
+    _run_contained(_tar(indir / "bad.tar", members), outdir, tmp_path)
+
+
+def test_tar_write_through_symlink_chain_stays_inside(indir, outdir, tmp_path):
+    members = [
+        _member("l1", tarfile.SYMTYPE, "."),
+        _member("l2", tarfile.SYMTYPE, "l1/.."),
+        _member("l2/evil.txt"),
+    ]
+    _run_contained(_tar(indir / "bad.tar", members), outdir, tmp_path)
+
+
+def test_tar_empty_hardlink_refused(indir, outdir, tmp_path):
+    archive = _tar(indir / "bad.tar", [_member("hard", tarfile.LNKTYPE, ".")])
+    assert UNSAFE_PREFIX in _run_refused(archive, outdir, tmp_path)
+
+
+def test_zip_huge_link_target_refused(indir, outdir, tmp_path):
+    z = _zip_symlink(indir / "bad.zip", "lnk", "a" * 5000)
+    assert UNSAFE_PREFIX in _run_refused(z, outdir, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        {"a": "file", "a/b.txt": "under a file"},
+        {"a/": "", "a": "file over folder"},
+    ],
+)
+def test_zip_conflicting_entries(indir, outdir, entries):
+    z = _zip(indir / "c.zip", entries)
+    with pytest.raises(errors.QSError) as exc:
+        _run([z], outdir)
+    assert str(exc.value).startswith("「c.zip」裡有互相衝突的項目「")
+    assert list(outdir.iterdir()) == []
+
+
+@pytest.mark.filterwarnings("ignore:Duplicate name")
+def test_zip_link_conflicts_with_file(indir, outdir):
+    z = _zip_symlink(indir / "c.zip", "x", "y", {"x": "file", "y": "y"})
+    with pytest.raises(errors.QSError) as exc:
+        _run([z], outdir)
+    assert str(exc.value) == "「c.zip」裡有互相衝突的項目「x」，無法解壓縮。"
+
+
+def test_zip_unix_directories(indir, outdir):
+    z = indir / "d.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.mkdir("top")
+        zf.mkdir("top/empty")
+        zf.writestr("top/a.txt", "a")
+    [out] = _run([z], outdir)
+    assert out == outdir / "top"
+    assert (out / "empty").is_dir()
+
+
+def test_truncated_tar_gz(indir, outdir):
+    good = _tar(indir / "src.tar.gz", [_member(f"f{i}.txt") for i in range(50)], "w:gz")
+    bad = indir / "cut.tar.gz"
+    bad.write_bytes(good.read_bytes()[:60])
+    with pytest.raises(errors.QSError) as exc:
+        _run([bad], outdir)
+    assert str(exc.value) == "「cut.tar.gz」無法解壓縮：檔案可能已損毀，或不是支援的壓縮格式。"
+
+
+def test_unreadable_archive(indir, outdir):
+    z = _zip(indir / "locked.zip", {"a.txt": "a"})
+    z.chmod(0)
+    try:
+        with pytest.raises(errors.QSError) as exc:
+            _run([z], outdir)
+        assert str(exc.value) == "無法讀取檔案內容：沒有權限讀取「locked.zip」。"
+    finally:
+        z.chmod(0o644)
+
+
+def _seven_zip(*args: str) -> None:
+    process.run_checked([backends.require("7z"), "-bd", *args], "7z")
+
+
+def test_encrypted_7z_via_bsdtar(indir, outdir, tmp_path):
+    src = tmp_path / "secret.txt"
+    src.write_text("s")
+    archive = indir / "locked.7z"
+    _seven_zip("a", "-pSECRET", str(archive), str(src))
+    with pytest.raises(errors.QSError) as exc:
+        _run([archive], outdir)
+    assert str(exc.value) == "「locked.7z」有密碼保護，目前無法解壓縮。"
+
+
+@pytest.mark.parametrize("header", [False, True])
+def test_encrypted_7z_via_7z(indir, outdir, tmp_path, monkeypatch, header):
+    src = tmp_path / "secret.txt"
+    src.write_text("s")
+    archive = indir / "locked.7z"
+    _seven_zip("a", "-pSECRET", f"-mhe={'on' if header else 'off'}", str(archive), str(src))
+    real_find = backends.find
+    monkeypatch.setattr(backends, "find", lambda k: None if k == "bsdtar" else real_find(k))
+    with pytest.raises(errors.QSError) as exc:
+        _run([archive], outdir)
+    assert str(exc.value) == "「locked.7z」有密碼保護，目前無法解壓縮。"
+
+
+def test_7z_route_removes_junk(indir, outdir, monkeypatch):
+    src = indir / "src"
+    (src / "__MACOSX").mkdir(parents=True)
+    (src / "__MACOSX" / "._a").write_text("junk")
+    (src / "sub").mkdir()
+    (src / "sub" / ".DS_Store").write_text("junk")
+    (src / "sub" / "x.txt").write_text("x")
+    (src / "a.txt").write_text("a")
+    archive = indir / "m.7z"
+    _bsdtar("-cf", str(archive), "--format", "7zip", "-C", str(src), ".")
+    real_find = backends.find
+    monkeypatch.setattr(backends, "find", lambda k: None if k == "bsdtar" else real_find(k))
+    [out] = _run([archive], outdir)
+    found = sorted(str(p.relative_to(out)) for p in out.rglob("*"))
+    assert found == ["a.txt", "sub", "sub/x.txt"]
+
+
+def test_corrupt_7z_without_7z(indir, outdir, monkeypatch):
+    archive = indir / "bad.7z"
+    archive.write_bytes(b"7z\xbc\xaf\x27\x1c\x00\x04" + bytes(range(7, 200)))
+    real_find = backends.find
+    monkeypatch.setattr(backends, "find", lambda k: None if k == "7z" else real_find(k))
+    with pytest.raises(errors.QSError) as exc:
+        _run([archive], outdir)
+    assert str(exc.value) == "「bad.7z」無法解壓縮：檔案可能已損毀，或不是支援的壓縮格式。"
+
+
+def test_7z_extraction_failure(indir, outdir, monkeypatch):
+    from quickseemd.core.tools.other import unpack_external
+
+    src = indir / "src"
+    src.mkdir()
+    (src / "x.txt").write_text("x")
+    archive = indir / "f.7z"
+    _bsdtar("-cf", str(archive), "--format", "7zip", "-C", str(src), "x.txt")
+    real_find = backends.find
+    monkeypatch.setattr(backends, "find", lambda k: None if k == "bsdtar" else real_find(k))
+    real_run = process.run
+
+    def fake_run(args, **kw):
+        if args[1] == "x":
+            return process.Result(2, "", "ERROR: Data Error")
+        return real_run(args, **kw)
+
+    monkeypatch.setattr(unpack_external.process, "run", fake_run)
+    with pytest.raises(errors.QSError) as exc:
+        _run([archive], outdir)
+    assert "無法解壓縮" in str(exc.value)
+
+
+def test_check_listing_rules():
+    from quickseemd.core.tools.other import unpack_external
+    from quickseemd.core.tools.other.archivekind import Encrypted, UnsafeEntry
+
+    ok = "Path = a.txt\nAttributes = A -rw-r--r--\nEncrypted = -\n\nPath = d\nAttributes = D\n"
+    unpack_external.check_listing(ok)
+    with pytest.raises(UnsafeEntry):
+        unpack_external.check_listing("Path = dev/null\nAttributes = A crw-rw-rw-\n")
+    with pytest.raises(UnsafeEntry):
+        unpack_external.check_listing("Path = ../x\nAttributes = A -rw-r--r--\n")
+    with pytest.raises(Encrypted):
+        unpack_external.check_listing("Path = s.txt\nEncrypted = +\n")
+
+
+# ------------------------------------------------------------------ 種類判斷與路徑規則
+
+
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("a.zip", "zip"),
+        ("A.ZIP", "zip"),
+        ("a.tar", "tar"),
+        ("a.tgz", "tar"),
+        ("a.tar.zst", "tar"),
+        ("a.7z", "7z"),
+        ("a.rar", "rar"),
+        ("a.pkg", "xar"),
+        ("a.cpio", "cpio"),
+        ("a.iso", "iso"),
+        ("a.gz", "gzip"),
+        ("a.bz2", "bzip2"),
+        ("a.xz", "xz"),
+        ("a.docx", None),
+        ("a.epub", None),
+        ("a.txt", None),
+        ("noext", None),
+        (".zip", None),
+    ],
+)
+def test_archive_kind(tmp_path, name, kind):
+    from quickseemd.core.tools.other.archivekind import archive_kind
+
+    p = tmp_path / name
+    p.write_bytes(b"")
+    result = archive_kind(p)
+    assert (result.value if result else None) == kind
+
+
+def test_archive_kind_folder(tmp_path):
+    from quickseemd.core.tools.other.archivekind import archive_kind
+
+    d = tmp_path / "x.zip"
+    d.mkdir()
+    assert archive_kind(d) is None
+
+
+def test_path_rules():
+    from quickseemd.core.tools.other.archivekind import (
+        UnsafeEntry,
+        is_junk,
+        link_stays_inside,
+        safe_parts,
+    )
+
+    assert safe_parts("./a//b/") == ("a", "b")
+    assert safe_parts("a\\b", backslash=True) == ("a", "b")
+    assert safe_parts("a\\..\\b") == ("a\\..\\b",)
+    for bad in ("a\0b", "/x", "C:x", "a/../../b"):
+        with pytest.raises(UnsafeEntry):
+            safe_parts(bad)
+    assert link_stays_inside(("d", "l"), "../x")
+    assert link_stays_inside(("d", "l"), "./y/../z")
+    assert not link_stays_inside(("l",), "../x")
+    assert not link_stays_inside(("l",), "")
+    assert not link_stays_inside(("l",), "C:/x")
+    assert is_junk(("__MACOSX", "a")) and is_junk(("a", "._b")) and is_junk((".DS_Store",))
+    assert not is_junk(()) and not is_junk(("a", "b"))
+
+
+def test_verify_tree_rejects_special_files(tmp_path):
+    from quickseemd.core.tools.other.archivekind import UnsafeEntry, verify_tree
+
+    os.mkfifo(tmp_path / "pipe")
+    with pytest.raises(UnsafeEntry):
+        verify_tree(tmp_path)

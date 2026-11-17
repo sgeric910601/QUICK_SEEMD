@@ -100,8 +100,7 @@ def test_srt_to_vtt():
 
 def test_vtt_to_srt_strips_settings_and_renumbers():
     assert convert(VTT, to_vtt=False, shift=0) == (
-        "1\n00:00:01,000 --> 00:00:02,500\nHello\n\n"
-        "2\n01:00:03,250 --> 01:00:05,000\nWorld\n"
+        "1\n00:00:01,000 --> 00:00:02,500\nHello\n\n" "2\n01:00:03,250 --> 01:00:05,000\nWorld\n"
     )
 
 
@@ -110,9 +109,7 @@ def test_shift_and_clamp():
     assert convert(text, to_vtt=False, shift=-1.0) == "1\n00:00:00,000 --> 00:00:00,999\nA\n"
     assert convert(text, to_vtt=False, shift=0.5) == "1\n00:00:01,000 --> 00:00:02,499\nA\n"
     big = "1\n00:59:59,900 --> 01:00:00,100\nB\n"
-    assert convert(big, to_vtt=True, shift=0.2) == (
-        "WEBVTT\n\n01:00:00.100 --> 01:00:00.300\nB\n"
-    )
+    assert convert(big, to_vtt=True, shift=0.2) == ("WEBVTT\n\n01:00:00.100 --> 01:00:00.300\nB\n")
 
 
 def test_millisecond_rounding_caps_at_999():
@@ -166,3 +163,18 @@ def test_tool_binary_is_unreadable(tmp_path):
     with pytest.raises(errors.QSError) as exc:
         _run([src])
     assert str(exc.value) == "無法讀取檔案內容：bad.srt"
+
+
+def test_tool_invalid_target(tmp_path):
+    src = tmp_path / "a.srt"
+    src.write_text(SRT)
+    with pytest.raises(errors.QSError) as exc:
+        _run([src], target="ass")
+    assert str(exc.value) == "不支援的字幕格式：ass"
+
+
+def test_tool_shift_is_clamped(tmp_path, outdir):
+    src = tmp_path / "a.srt"
+    src.write_bytes(b"1\n00:00:30,000 --> 00:00:31,000\nA\n")
+    [out] = _run([src], outdir, target="srt", shift=99)
+    assert "00:00:40,000 --> 00:00:41,000" in out.read_text("utf-8")

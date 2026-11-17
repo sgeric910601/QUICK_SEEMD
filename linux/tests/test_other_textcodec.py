@@ -51,7 +51,9 @@ def test_utf32_with_bom():
     assert d.display_name == "UTF-32"
 
 
-@pytest.mark.parametrize(("codec", "expected"), [("utf-16-le", tc.UTF16LE), ("utf-16-be", tc.UTF16BE)])
+@pytest.mark.parametrize(
+    ("codec", "expected"), [("utf-16-le", tc.UTF16LE), ("utf-16-be", tc.UTF16BE)]
+)
 def test_utf16_without_bom(codec, expected):
     text = "Hello world, this is mostly ASCII text.\nSecond line here.\n"
     d = tc.decode(text.encode(codec))
@@ -237,3 +239,34 @@ def test_looks_like_text():
     assert tc.looks_like_text("中文\n".encode())
     assert not tc.looks_like_text(b"abc\x00")
     assert not tc.looks_like_text(bytes(range(1, 9)) * 10)
+
+
+def test_utf8_with_nul_that_is_not_utf16():
+    d = tc.decode(b"abc\x00def")
+    assert d.encoding == tc.UTF8 and d.text == "abc\x00def"
+
+
+def test_detect_legacy_encoding():
+    assert tc.detect_legacy_encoding("中文".encode()) == tc.UTF8
+    assert tc.detect_legacy_encoding("繁體中文資料夾".encode("cp950")) == tc.BIG5
+    assert tc.detect_legacy_encoding("简体中文文件夹".encode("gb18030")) == tc.GB18030
+    assert tc.detect_legacy_encoding(b"\x81\x20\x81\x20") is None
+
+
+def test_without_charset_normalizer(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "charset_normalizer", None)
+    assert tc.decode(TW.encode("cp950")).text == TW
+
+
+def test_scriptfit():
+    from quickseemd.core.tools.other import scriptfit
+
+    assert scriptfit.plausibility("zh", "abc") == 1.0
+    assert scriptfit.plausibility("zh", "的是不了") == 1.0
+    assert scriptfit.plausibility("zh", "★☆") == 0.0
+    assert scriptfit.plausibility("ko", "한국어") == 1.0
+    assert scriptfit.plausibility("ja", "ひらがな") == 1.0
+    assert scriptfit.plausibility("latin", "Café crème déjà vu") == 1.0
+    assert scriptfit.plausibility("latin", "µÚÒ»ÐÐ") < 0.3

@@ -148,3 +148,52 @@ def test_decode_payload_bytes():
         "日本語のテキストです。今日は晴れ。"
     )
     assert decode_payload(b"\x81\x20\x81\x20") == "\x81 \x81 "
+
+
+def test_heic_input(tmp_path):
+    from quickseemd.core import backends, process
+
+    png = _save(cv2.cvtColor(_qr("HEIC 相片"), cv2.COLOR_GRAY2RGB), tmp_path / "src.png")
+    heic = tmp_path / "photo.heic"
+    process.run_checked(
+        [backends.require("heif-enc"), "-q", "90", "-o", str(heic), str(png)], "heif-enc"
+    )
+    [out], _ = _run([heic])
+    assert out.read_text("utf-8") == "HEIC 相片\n"
+
+
+def test_broken_pdf(tmp_path):
+    bad = tmp_path / "bad.pdf"
+    bad.write_bytes(b"%PDF-1.4\nnot really a pdf")
+    with pytest.raises(errors.QSError) as exc:
+        _run([bad])
+    assert str(exc.value) == "無法讀取檔案內容：bad.pdf"
+
+
+def test_zbar_public_api_fallback(tmp_path, monkeypatch):
+    from quickseemd.core.tools.other import readqr
+
+    def broken(_img):
+        raise AttributeError("內部介面不見了")
+
+    monkeypatch.setattr(readqr, "_zbar_binary", broken)
+    img = _save(_qr("fallback"), tmp_path / "f.png")
+    [out], _ = _run([img])
+    assert out.read_text("utf-8") == "fallback\n"
+
+
+def test_opencv_fallback_and_failure(tmp_path, monkeypatch):
+    from quickseemd.core.tools.other import readqr
+
+    monkeypatch.setattr(readqr, "_zbar_scan", lambda _img: [])
+    img = _save(_qr("opencv"), tmp_path / "o.png")
+    [out], _ = _run([img])
+    assert out.read_text("utf-8") == "opencv\n"
+
+    def boom():
+        raise cv2.error("壞了")
+
+    monkeypatch.setattr(cv2, "QRCodeDetector", boom)
+    with pytest.raises(errors.QSError) as exc:
+        _run([img])
+    assert str(exc.value) == NOT_FOUND

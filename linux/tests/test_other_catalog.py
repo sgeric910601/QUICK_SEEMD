@@ -43,7 +43,9 @@ def test_tints():
     assert tints["other.checksum"] == TINTS["slate"]
 
 
-@pytest.mark.parametrize("action_id", ["other.zip", "other.unzip", "other.to-utf8", "other.read-qr"])
+@pytest.mark.parametrize(
+    "action_id", ["other.zip", "other.unzip", "other.to-utf8", "other.read-qr"]
+)
 def test_quick_action_presets(action_id):
     act = quickactions.action(action_id)
     tool = registry.tool(act.tool_id)

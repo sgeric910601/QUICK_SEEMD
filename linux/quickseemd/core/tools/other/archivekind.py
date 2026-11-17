@@ -35,7 +35,21 @@ class ArchiveKind(str, Enum):
 SINGLE_FILE_KINDS = frozenset({ArchiveKind.GZIP, ArchiveKind.BZIP2, ArchiveKind.XZ})
 # 本質是 ZIP 但不當壓縮檔處理的文件格式
 ZIP_BASED_DOCUMENTS = frozenset(
-    {"docx", "xlsx", "pptx", "odt", "ods", "odp", "epub", "ipa", "jar", "apk", "pages", "numbers", "key"}
+    {
+        "docx",
+        "xlsx",
+        "pptx",
+        "odt",
+        "ods",
+        "odp",
+        "epub",
+        "ipa",
+        "jar",
+        "apk",
+        "pages",
+        "numbers",
+        "key",
+    }
 )
 _TAR_EXTS = frozenset({"tar", "tgz", "tbz", "tbz2", "txz"})
 _BY_EXT = {

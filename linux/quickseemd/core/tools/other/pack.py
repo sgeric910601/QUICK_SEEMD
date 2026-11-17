@@ -22,6 +22,7 @@ from typing import BinaryIO
 
 from ... import errors
 from ...model import ToolContext
+from . import textcodec
 from .archivekind import JUNK_DIRS, JUNK_NAMES
 
 log = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ def _walk(directory: Path, prefix: str) -> list[Entry]:
     try:
         children = sorted(os.scandir(directory), key=lambda e: e.name)
     except OSError as exc:
-        raise errors.unreadable(f"「{directory.name}」：{exc.strerror or exc}") from exc
+        raise errors.unreadable(textcodec.read_error_text(directory, exc)) from exc
     for child in children:
         if child.name in JUNK_NAMES:
             continue
@@ -90,7 +91,7 @@ def collect(item: Path, arcname: str) -> list[Entry]:
         raise errors.file_not_found(Path(item).name) from exc
     top = _entry_for(source, arcname, st)
     if top is None:
-        return []
+        raise errors.unreadable(f"「{Path(item).name}」不是一般的檔案或資料夾。")
     if top.kind != "dir":
         return [top]
     return [top, *_walk(source, arcname)]
@@ -122,7 +123,7 @@ def _open_source(path: Path) -> BinaryIO:
     try:
         return open(path, "rb")  # noqa: SIM115 — 呼叫端用 with 關閉
     except OSError as exc:
-        raise errors.unreadable(f"「{path.name}」：{exc.strerror or exc}") from exc
+        raise errors.unreadable(textcodec.read_error_text(path, exc)) from exc
 
 
 # ---------------------------------------------------------------- ZIP
