@@ -48,13 +48,20 @@ def resample(image: Image.Image, width: int, height: int, smooth: bool = True) -
 
 def square_icon(image: Image.Image, side: int) -> Image.Image:
     """非正方形的圖置中放進透明正方形。"""
-    rgba = image.convert("RGBA")
+    rgba = _plain_rgba(image)
     scale = side / max(rgba.width, rgba.height)
     w = max(1, round(rgba.width * scale))
     h = max(1, round(rgba.height * scale))
     canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     canvas.paste(resample(rgba, w, h), ((side - w) // 2, (side - h) // 2))
     return canvas
+
+
+def _plain_rgba(image: Image.Image) -> Image.Image:
+    """RGBA 複本，不帶 info（避免 Pillow 把註解等資訊寫進圖示）。"""
+    rgba = image.convert("RGBA")
+    rgba.info = {}
+    return rgba
 
 
 def _png_bytes(image: Image.Image) -> bytes:
@@ -66,8 +73,9 @@ def _png_bytes(image: Image.Image) -> bytes:
 def write_ico(base: Image.Image, path: Path, progress: Progress | None = None) -> None:
     """寫出多尺寸 ICO；base 是正方形的母版。"""
     images: dict[int, Image.Image] = {}
+    rgba = _plain_rgba(base)
     for i, side in enumerate(ICO_SIDES):
-        images[side] = resample(base.convert("RGBA"), side, side)
+        images[side] = resample(rgba, side, side)
         if progress:
             progress(i + 1, len(ICO_SIDES), side)
     first = images[ICO_SIDES[-1]]
@@ -82,9 +90,10 @@ def write_icns(base: Image.Image, path: Path, progress: Progress | None = None) 
     """寫出 ICNS（各尺寸 PNG 區塊）；base 是正方形的母版。"""
     cache: dict[int, bytes] = {}
     chunks: list[bytes] = []
+    rgba = _plain_rgba(base)
     for i, (kind, side) in enumerate(ICNS_ENTRIES):
         if side not in cache:
-            cache[side] = _png_bytes(resample(base.convert("RGBA"), side, side))
+            cache[side] = _png_bytes(resample(rgba, side, side))
             if progress:
                 progress(len(cache), len(set(s for _k, s in ICNS_ENTRIES)), side)
         data = cache[side]

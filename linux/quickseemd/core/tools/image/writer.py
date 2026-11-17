@@ -93,13 +93,23 @@ def flatten(image: Image.Image, color: colors.Rgba) -> Image.Image:
     return bg
 
 
-def prepare(image: Image.Image, output: Output) -> Image.Image:
-    """依格式處理透明度。"""
-    if image.mode != "RGBA":
+def clean(image: Image.Image) -> Image.Image:
+    """不帶 image.info 的版本（Pillow 會把 info 裡的註解等資訊自動寫進檔案）。
+
+    呼叫端的圖不會被改到：info 有內容時複製一份再清空。
+    """
+    if not image.info:
         return image
-    if not formats.get(output.format).alpha or not output.keeps_alpha:
+    copy = image.copy()
+    copy.info = {}
+    return copy
+
+
+def prepare(image: Image.Image, output: Output) -> Image.Image:
+    """依格式處理透明度，並去掉 info（要寫的資訊一律由 encoder_params 明確指定）。"""
+    if image.mode == "RGBA" and (not formats.get(output.format).alpha or not output.keeps_alpha):
         return flatten(image, output.background)
-    return image
+    return clean(image)
 
 
 # ---------------------------------------------------------------- 相片資訊

@@ -277,6 +277,66 @@ def test_write_metadata_modes(tmp_path):
     assert "Model" not in names and "DateTimeOriginal" not in names
 
 
+PRIVATE_TAGS = (
+    "-GPSLatitude=25.03",
+    "-GPSLatitudeRef=N",
+    "-XMP-exif:GPSLatitude=10",
+    "-XMP-exif:GPSLongitude=20",
+    "-XMP-photoshop:City=Taipei",
+    "-XMP-iptcCore:Location=Here",
+    "-IPTC:City=Taipei",
+    "-Model=Cam 1",
+)
+
+
+def _private_leaks(path: Path, mode: str) -> list[str]:
+    """輸出檔裡不該出現的標籤（exiftool -j -G）。"""
+    tags = exiftool_json(path)
+    bad = []
+    for key, value in tags.items():
+        group, _sep, name = key.partition(":")
+        if group in ("File", "System", "ExifTool", "Composite", "SourceFile"):
+            continue
+        location = name.startswith("GPS") or name in ("City", "Location", "Sub-location")
+        private = group in ("XMP", "IPTC", "Photoshop") or "Comment" in name or "secret" in str(value)
+        if location or private or (mode == writer.REMOVE_ALL and name == "Model"):
+            bad.append(key)
+    return bad
+
+
+@pytest.mark.parametrize("src_ext", ["jpg", "png"])
+@pytest.mark.parametrize("fmt", ["jpeg", "png", "webp", "tiff", "gif"])
+@pytest.mark.parametrize("mode", [writer.REMOVE_LOCATION, writer.REMOVE_ALL])
+def test_removed_metadata_never_leaks(tmp_path, src_ext, fmt, mode):
+    base = make_image(tmp_path / f"a.{src_ext}", size=(64, 48))
+    comment = "-Comment=secret note" if src_ext == "jpg" else "-PNG:Comment=secret note"
+    leaky = with_metadata(base, tmp_path / f"leaky.{src_ext}", *PRIVATE_TAGS, comment)
+    assert "secret" in str(exiftool_json(leaky))  # 測試資料真的帶著私人資訊
+    s = loader.load(leaky)
+    out = tmp_path / f"o.{formats.get(fmt).ext}"
+    writer.write(s.frames, s, out, writer.Output(fmt, metadata=mode))
+    assert _private_leaks(out, mode) == []
+    if mode == writer.REMOVE_LOCATION and fmt in ("jpeg", "png", "webp") and src_ext == "jpg":
+        assert "Model" in tag_names(out)  # 只移除位置時相機資訊還在
+
+
+def test_loaded_frames_carry_no_info(tmp_path):
+    base = make_image(tmp_path / "a.png", size=(32, 32))
+    leaky = with_metadata(base, tmp_path / "leaky.png", *PRIVATE_TAGS, "-PNG:Comment=secret")
+    s = loader.load(leaky)
+    assert all(f.image.info == {} for f in s.frames)
+
+
+def test_writer_ignores_info_on_given_images(tmp_path):
+    img = Image.new("RGB", (16, 16), "red")
+    img.info.update({"comment": b"secret", "xmp": b"<x:xmpmeta>secret</x:xmpmeta>"})
+    for fmt in ("jpeg", "png", "webp", "gif"):
+        out = tmp_path / f"o.{formats.get(fmt).ext}"
+        writer.write_image(img, None, out, writer.Output(fmt, metadata=writer.REMOVE_ALL))
+        assert b"secret" not in out.read_bytes()
+    assert img.info["comment"] == b"secret"  # 呼叫端的圖不會被改到
+
+
 def test_write_keeps_icc_profile(tmp_path):
     from PIL import ImageCms
 

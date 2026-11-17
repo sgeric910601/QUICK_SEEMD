@@ -200,6 +200,8 @@ def _from_pillow(p: Path, im: Image.Image, all_frames: bool, size: int) -> Sourc
         image, keep_icc = normalize(raw, icc)
         if orientation in _TRANSPOSE:
             image = image.transpose(_TRANSPOSE[orientation])
+        # 畫格不帶任何原檔資訊（註解、XMP、IPTC、PNG 文字…）；要寫出的資訊只從 Source 明確取用
+        image.info = {}
         frames.append(Frame(image, delay))
     loop = info.get("loop") if fmt == "gif" else None
     return Source(
@@ -339,6 +341,7 @@ def _load_pixbuf(p: Path, size: int) -> Source | None:
     is_svg = p.suffix.lower() in (".svg", ".svgz")
     if is_svg and mode == "RGB":
         image = image.convert("RGBA")
+    image.info = {}
     return Source(
         path=p,
         frames=(Frame(image, 0.0),),
