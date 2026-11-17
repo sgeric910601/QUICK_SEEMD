@@ -91,7 +91,7 @@ def parse(data: bytes) -> Node | None:
     return root
 
 
-_ESCAPE_RE = re.compile('[&<>"\x00-\x08\x0b\x0c\x0e-\x1f￾￿]')
+_ESCAPE_RE = re.compile('[&<>"\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]')
 _ESCAPE_MAP = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}
 
 

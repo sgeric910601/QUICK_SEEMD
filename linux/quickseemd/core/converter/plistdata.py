@@ -15,9 +15,11 @@ from typing import Any
 
 from .. import errors
 from . import xmldom
-from .structured import Num, Obj, Value, deep_recursion, swift_double
+from .structured import Num, Obj, Value, deep_recursion, safe_number_text, swift_double
 
 _INT64 = re.compile(r"[+-]?[0-9]+")
+# plist 的 <real> 只接受十進位浮點數（數字文字之後會原樣寫進其他格式，不能夾帶別的內容）
+_REAL = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
@@ -46,14 +48,23 @@ def _emit(value: Value, indent: str, out: list[str]) -> None:
     elif value is True or value is False:
         out.append(indent + ("<true/>" if value else "<false/>") + "\n")
     elif isinstance(value, Num):
-        tag = "integer" if as_int64(value.text) is not None else "real"
-        out.append(f"{indent}<{tag}>{value.text}</{tag}>\n")
+        _emit_number(value, indent, out)
     elif isinstance(value, str):
         out.append(f"{indent}<string>{xmldom.escape(value)}</string>\n")
     elif isinstance(value, tuple):
         _emit_array(value, indent, out)
     else:
         _emit_dict(value, indent, out)
+
+
+def _emit_number(value: Num, indent: str, out: list[str]) -> None:
+    """數字先驗證；不是合法數字文字時當成字串輸出（避免注入）。"""
+    safe = safe_number_text(value.text)
+    if safe is None:
+        out.append(f"{indent}<string>{xmldom.escape(value.text)}</string>\n")
+        return
+    tag = "integer" if as_int64(safe) is not None else "real"
+    out.append(f"{indent}<{tag}>{xmldom.escape(safe)}</{tag}>\n")
 
 
 def _emit_array(items: tuple, indent: str, out: list[str]) -> None:
@@ -140,8 +151,10 @@ def _from_xml_scalar(node: xmldom.Node) -> Value:
     if name == "string":
         return node.text
     if name == "integer":
-        return Num(text)
+        return Num(text) if _INT64.fullmatch(text) else text
     if name == "real":
+        if not _REAL.fullmatch(text):
+            return text
         number = swift_double(text)
         return Num(text) if number is not None and math.isfinite(number) else text
     if name in ("true", "false"):

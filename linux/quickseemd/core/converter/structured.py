@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from collections.abc import Iterator
@@ -107,7 +108,7 @@ class _Parser:
     def __init__(self, text: str) -> None:
         self.s = text
         self.n = len(text)
-        self.pos = 1 if text.startswith("﻿") else 0
+        self.pos = 1 if text.startswith("\N{ZERO WIDTH NO-BREAK SPACE}") else 0
         self.line = 1
 
     def error(self, message: str) -> errors.QSError:
@@ -274,18 +275,43 @@ def parse_json(text: str) -> Value:
 
 # ---------------------------------------------------------------- JSON 輸出
 
-_QUOTE_SPECIAL = re.compile(r'["\\\x00-\x1f  ]')
+# JSON 字串要跳脫的字元：引號、反斜線、控制字元（含 C1）、U+2028／U+2029、BOM、
+# 單獨的代理字元與非字元 U+FFFE／U+FFFF（原版只跳脫前三類；其餘是為了安全與可讀性補上）
+_QUOTE_SPECIAL = re.compile(
+    '["\\\\\x00-\x1f\x7f-\x9f\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}\N{ZERO WIDTH NO-BREAK SPACE}\ud800-\udfff\ufffe\uffff]'
+)
 _QUOTE_MAP = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\b": "\\b"}
 _QUOTE_MAP["\f"] = "\\f"
 
 
 def _quote_char(m: re.Match[str]) -> str:
     c = m.group(0)
-    return _QUOTE_MAP.get(c) or f"\\u{ord(c):04x}"
+    if c in _QUOTE_MAP:
+        return _QUOTE_MAP[c]
+    if ord(c) == 0x7F:
+        return c
+    return f"\\u{ord(c):04x}"
 
 
 def quote(s: str) -> str:
     return '"' + _QUOTE_SPECIAL.sub(_quote_char, s) + '"'
+
+
+# JSON 數字文法；不符合的數字字串一律不原樣寫出（避免注入額外內容）
+_JSON_NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
+_PLAIN_INT = re.compile(r"[+-]?[0-9]+")
+
+
+def safe_number_text(text: str) -> str | None:
+    """可以原樣寫進 JSON／YAML／plist 的數字文字；寬鬆寫法會正規化，無法表示時回傳 None。"""
+    if _JSON_NUMBER.fullmatch(text):
+        return text
+    if _PLAIN_INT.fullmatch(text):
+        return str(int(text))
+    value = swift_double(text)
+    if value is None or not math.isfinite(value):
+        return None
+    return repr(value)
 
 
 def _emit(value: Value, pretty: bool, indent: str, out: list[str]) -> None:
@@ -294,7 +320,8 @@ def _emit(value: Value, pretty: bool, indent: str, out: list[str]) -> None:
     elif value is True or value is False:
         out.append("true" if value else "false")
     elif isinstance(value, Num):
-        out.append(value.text)
+        safe = safe_number_text(value.text)
+        out.append(safe if safe is not None else quote(value.text))
     elif isinstance(value, str):
         out.append(quote(value))
     elif isinstance(value, tuple):
@@ -352,7 +379,14 @@ _YAML_RESERVED = frozenset(
     {"true", "false", "yes", "no", "on", "off", "null", "~", "y", "n", ".nan", ".inf", "-.inf"}
 )
 _YAML_LEAD = set("-?:,[]{}#&*!|>'\"%@`")
-_YAML_CONTROL = re.compile(r"[\x00-\x1f\x7f  ]")
+# YAML 可列印字元以外的字元（含 C1 控制字元、代理字元、U+FFFE／U+FFFF），
+# 以及雖可列印但會被當成換行或 BOM 的 U+0085、U+2028、U+2029、U+FEFF：一律加引號
+_YAML_UNSAFE = re.compile(
+    "[\x00-\x1f\x7f-\x9f\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}\N{ZERO WIDTH NO-BREAK SPACE}\ud800-\udfff\ufffe\uffff]"
+)
+_YAML_ESCAPE = re.compile(
+    '["\\\\\x00-\x1f\x7f-\x9f\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}\N{ZERO WIDTH NO-BREAK SPACE}\ud800-\udfff\ufffe\uffff]'
+)
 _YAML_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -365,13 +399,30 @@ def _yaml_needs_quote(s: str) -> bool:
         return True
     if ": " in s or " #" in s or s.endswith(":"):
         return True
-    return bool(_YAML_CONTROL.search(s) or _YAML_DATE.match(s))
+    return bool(_YAML_UNSAFE.search(s) or _YAML_DATE.match(s))
+
+
+def _yaml_escape_char(m: re.Match[str]) -> str:
+    c = m.group(0)
+    if c in _QUOTE_MAP:
+        return _QUOTE_MAP[c]
+    code = ord(c)
+    if code < 0x20:
+        return f"\\u{code:04x}"
+    if code <= 0xFF:
+        return f"\\x{code:02x}"
+    return f"\\u{code:04x}"
+
+
+def yaml_quote(s: str) -> str:
+    """YAML 雙引號字串（跳脫規則相容 JSON，另外以 \\xNN／\\uNNNN 表示不可列印字元）。"""
+    return '"' + _YAML_ESCAPE.sub(_yaml_escape_char, s) + '"'
 
 
 def yaml_quote_if_needed(s: str) -> str:
     if not s:
         return '""'
-    return quote(s) if _yaml_needs_quote(s) else s
+    return yaml_quote(s) if _yaml_needs_quote(s) else s
 
 
 def _yaml_scalar(value: Value) -> str:
@@ -380,7 +431,8 @@ def _yaml_scalar(value: Value) -> str:
     if value is True or value is False:
         return "true" if value else "false"
     if isinstance(value, Num):
-        return value.text
+        safe = safe_number_text(value.text)
+        return safe if safe is not None else yaml_quote(value.text)
     if isinstance(value, str):
         return yaml_quote_if_needed(value)
     return "[]" if isinstance(value, tuple) else "{}"

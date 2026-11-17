@@ -56,7 +56,7 @@ def test_parse_lone_surrogate_becomes_replacement() -> None:
 
 
 def test_parse_bom_is_skipped() -> None:
-    assert parse("﻿[1]") == (Num("1"),)
+    assert parse("\N{ZERO WIDTH NO-BREAK SPACE}[1]") == (Num("1"),)
 
 
 def test_parse_duplicate_keys_are_kept() -> None:
@@ -114,7 +114,7 @@ def test_write_pretty_and_compact() -> None:
 
 
 def test_quote_escapes() -> None:
-    s = 'q"b\\n\nr\rt\tb\bf\f\x01  中'
+    s = 'q"b\\n\nr\rt\tb\bf\f\x01\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}中'
     assert structured.quote(s) == '"q\\"b\\\\n\\nr\\rt\\tb\\bf\\f\\u0001\\u2028\\u2029中"'
 
 
@@ -177,7 +177,7 @@ def test_yaml_scalar_root() -> None:
         ("key:", '"key:"'),
         ("a:b", "a:b"),
         ("tab\there", '"tab\\there"'),
-        ("del\x7f", '"del\x7f"'),
+        ("del\x7f", '"del\\x7f"'),  # 原版原樣輸出 DEL；YAML 規定不可列印，改成跳脫
         ("2024-01-03", '"2024-01-03"'),
         ("2024-01-03T10:00", '"2024-01-03T10:00"'),
         ("v1.2.3", "v1.2.3"),
@@ -312,3 +312,97 @@ def test_entity_declarations_are_refused() -> None:
     )
     with pytest.raises(errors.QSError):
         plistdata.read_plist(xml)
+
+
+# ------------------------------------------------------------------ 安全：注入與不可列印字元
+
+
+def test_plist_integer_cannot_inject_json() -> None:
+    xml = (
+        b'<?xml version="1.0"?><plist version="1.0"><dict>'
+        b'<key>a</key><integer>1, "x": 2</integer>'
+        b"<key>b</key><real>1e3</real>"
+        b"<key>c</key><real>.5</real>"
+        b"<key>d</key><integer> 42 </integer>"
+        b"<key>e</key><real>1.0]</real>"
+        b"</dict></plist>"
+    )
+    v = plistdata.read_plist(xml)
+    assert v.get("a") == '1, "x": 2'
+    assert v.get("b") == Num("1e3")
+    assert v.get("c") == Num(".5")
+    assert v.get("d") == Num("42")
+    assert v.get("e") == "1.0]"
+    out = structured.write_json(v, pretty=False)
+    assert out == '{"a":"1, \\"x\\": 2","b":1e3,"c":0.5,"d":42,"e":"1.0]"}'
+
+
+@pytest.mark.parametrize(
+    ("raw", "json_text"),
+    [
+        ("12", "12"),
+        ("-0.5e-3", "-0.5e-3"),
+        ("007", "7"),
+        ("+5", "5"),
+        ("1.", "1.0"),
+        (".5", "0.5"),
+        ("1e400", "1e400"),  # 合乎 JSON 文法（只是超出範圍），原樣保留
+        ('1, "x": 2', '"1, \\"x\\": 2"'),
+        ("</real><key>", '"</real><key>"'),
+    ],
+)
+def test_writers_validate_number_text(raw: str, json_text: str) -> None:
+    assert structured.write_json(Num(raw), pretty=True) == json_text
+    assert structured.safe_number_text(raw) == (None if json_text.startswith('"') else json_text)
+
+
+def test_yaml_and_plist_never_emit_invalid_numbers() -> None:
+    bad = Obj((("k", Num("1\nevil: true")), ("m", Num("3"))))
+    assert structured.write_yaml(bad) == 'k: "1\\nevil: true"\nm: 3\n'
+    xml = plistdata.xml_plist(bad)
+    assert "<string>1\nevil: true</string>" in xml
+    assert "<integer>3</integer>" in xml
+    assert "evil: true</integer>" not in xml
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "a\x85b",
+        "a\x9fb",
+        "\N{ZERO WIDTH NO-BREAK SPACE}x",
+        "a\N{LINE SEPARATOR}b",
+        "a\N{PARAGRAPH SEPARATOR}b",
+        "a\ud800b",
+        "a\ufffeb",
+        "a\x0bb",
+    ],
+)
+def test_yaml_quotes_non_printable(raw: str) -> None:
+    out = structured.yaml_quote_if_needed(raw)
+    assert out.startswith('"') and out.endswith('"')
+    body = out[1:-1]
+    assert all(0x20 <= ord(c) < 0x7F or c in "中" or ord(c) >= 0xA0 for c in body)
+    for ch in (
+        "\x85",
+        "\x9f",
+        "\N{ZERO WIDTH NO-BREAK SPACE}",
+        "\N{LINE SEPARATOR}",
+        "\N{PARAGRAPH SEPARATOR}",
+        "\ud800",
+        "\ufffe",
+        "\x0b",
+    ):
+        assert ch not in body
+
+
+def test_yaml_escape_forms() -> None:
+    assert structured.yaml_quote_if_needed("a\x85") == '"a\\x85"'
+    assert structured.yaml_quote_if_needed("a\N{ZERO WIDTH NO-BREAK SPACE}") == '"a\\ufeff"'
+    assert structured.yaml_quote_if_needed("a\x01") == '"a\\u0001"'
+
+
+def test_json_quote_escapes_invisible_characters() -> None:
+    assert (
+        structured.quote("a\x85\N{ZERO WIDTH NO-BREAK SPACE}\ud800") == '"a\\u0085\\ufeff\\ud800"'
+    )
