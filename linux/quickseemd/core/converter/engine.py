@@ -98,6 +98,17 @@ def _route_function(route: str) -> Callable[..., list[Path]]:
     return getattr(importlib.import_module(f"{__package__}.{module}"), func)
 
 
+def _run_route(
+    target: Target, path: Path, profile: Profile, options: dict, work: Path, ctx
+) -> list[Path]:  # noqa: ANN001, E501
+    func = _route_function(target.route)
+    extra = {"backend": target.backend} if target.route == "external" else {}
+    try:
+        return func(path, profile, target.format, options, work, ctx, **extra)
+    except OSError as exc:
+        raise errors.write_failed(exc.strerror or str(exc)) from exc
+
+
 def _finish_message(delivered: list[Path]) -> str:
     if len(delivered) == 1:
         return f"完成：{delivered[0].name}"
@@ -118,11 +129,7 @@ def convert(path: Path, format_id: str, ctx, options: dict[str, Any]) -> list[Pa
     naming.ensure_writable(out_dir)
     work = ctx.make_work_dir(out_dir)
     ctx.progress(0)
-    func = _route_function(target.route)
-    if target.route == "external":
-        produced = func(path, profile, target.format, options, work, ctx, backend=target.backend)
-    else:
-        produced = func(path, profile, target.format, options, work, ctx)
+    produced = _run_route(target, path, profile, options, work, ctx)
     ctx.check_cancelled()
     delivered = [ctx.deliver(item, item.name, path) for item in produced]
     ctx.progress(1, _finish_message(delivered))

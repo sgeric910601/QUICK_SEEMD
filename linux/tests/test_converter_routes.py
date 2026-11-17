@@ -422,3 +422,17 @@ def test_single_file_decompression_respects_disk_space(
         run(src, "extract", outdir)
     assert "磁碟空間不足" in str(exc.value)
     assert list(outdir.iterdir()) == []
+
+
+def test_os_errors_become_chinese_messages(
+    samples: Path, outdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from quickseemd.core.converter import text
+
+    def boom(*_args: Any, **_kw: Any) -> list[Path]:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(text, "convert", boom)
+    with pytest.raises(errors.QSError) as exc:
+        run(samples / "app.py", "crlf", outdir)
+    assert str(exc.value) == "寫入輸出檔失敗：Permission denied"
