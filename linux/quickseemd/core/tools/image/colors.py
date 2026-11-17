@@ -46,7 +46,6 @@ class Rgba:
 WHITE = Rgba(1, 1, 1)
 BLACK = Rgba(0, 0, 0)
 CLEAR = Rgba(0, 0, 0, 0)
-GRAY = Rgba(0.5, 0.5, 0.5)  # SwiftUI Color.gray
 
 
 def _from_hex(text: str) -> Rgba | None:
