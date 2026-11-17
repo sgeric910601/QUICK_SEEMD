@@ -27,9 +27,11 @@ from pathlib import Path
 from quickseemd.previewer import content
 from quickseemd.previewer.uri import resolve
 c = content.load(resolve(Path(sys.argv[1]).as_uri()))
+# VmHWM：這個程式自己的常駐記憶體高水位（ru_maxrss 會沿用父程序 fork 當下的數字，不能用）
+hwm = next(int(line.split()[1]) for line in open("/proc/self/status")
+           if line.startswith("VmHWM:"))
 out = {"view": c.view, "natural": c.natural_size, "subtitle": c.subtitle,
-       "html": c.document.html if c.document else "",
-       "maxrss_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}
+       "html": c.document.html if c.document else "", "hwm_kb": hwm}
 print(json.dumps(out, ensure_ascii=False))
 """
 
@@ -80,7 +82,7 @@ def test_huge_png_shows_info_card_under_1gb(tmp_path: Path, edge: int):
     assert out["view"] == "page"
     assert "圖片太大" in out["html"]
     assert f"{edge} × {edge}" in out["html"]
-    assert out["maxrss_kb"] < 1024 * 1024
+    assert out["hwm_kb"] < 1024 * 1024
 
 
 @pytest.mark.slow
