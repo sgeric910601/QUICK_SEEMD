@@ -8,11 +8,13 @@ from __future__ import annotations
 from ...model import ToolDefinition
 from .compress import COMPRESS
 from .fromimages import FROM_IMAGES
+from .ocr import OCR
 from .organize import ORGANIZE, ROTATE
 from .pages import DELETE_PAGES, MERGE, SPLIT
 from .security import METADATA, PROTECT, UNLOCK
 from .stamp import PAGE_NUMBERS, WATERMARK
 from .toimages import TO_IMAGES
+from .totext import TO_TEXT
 
 TOOLS: list[ToolDefinition] = [
     MERGE,
@@ -27,5 +29,7 @@ TOOLS: list[ToolDefinition] = [
     PAGE_NUMBERS,
     PROTECT,
     UNLOCK,
+    OCR,
+    TO_TEXT,
     METADATA,
 ]
