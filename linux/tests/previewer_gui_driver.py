@@ -1,6 +1,7 @@
 """畫面測試的驅動程式：在私有 D-Bus 工作階段（dbus-run-session）裡操作預覽視窗與 Nemo。
 
 只能在隔離畫面（DISPLAY ≥ :120）執行；只結束自己啟動的程序（以及私有工作階段裡的預覽服務）。
+所有等待都是「輪詢條件、有期限」（見 previewer_gui_desktop.wait_until）。
 用法：python3 previewer_gui_driver.py preview|nemo 設定.json
       python3 previewer_gui_driver.py fake-agent 紀錄檔
 """
@@ -8,275 +9,183 @@
 from __future__ import annotations
 
 import json
-import os
-import signal
 import subprocess
 import sys
-import time
 import traceback
-from collections.abc import Callable
 from pathlib import Path
+
+from previewer_gui_desktop import (
+    Desktop,
+    Preview,
+    Region,
+    check_display,
+    ocr_find,
+    uri_of,
+    wait_until,
+)
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
 gi.require_version("GdkX11", "3.0")
-from gi.repository import Gdk, GdkX11, Gio, GLib, Gtk  # noqa: E402
-from Xlib import X, XK  # noqa: E402
-from Xlib import display as xdisplay  # noqa: E402
-from Xlib.ext import xtest  # noqa: E402
-
-PREVIEW = ("org.nemo.Preview", "/org/nemo/Preview", "org.nemo.Preview")
-AGENT_NAME = "dev.quickseemd.Agent"
+from gi.repository import GdkX11, Gio, GLib, Gtk  # noqa: E402
 
 
-def _check_display() -> None:
-    number = int(os.environ["DISPLAY"].lstrip(":").split(".")[0])
-    if number < 120:
-        raise SystemExit("只能在隔離畫面（:120 以上）執行")
+def _is(title: str):  # noqa: ANN202
+    return lambda t: t == title
 
 
-# ------------------------------------------------------------------ 畫面操作
-
-
-class Desktop:
-    def __init__(self, outdir: Path) -> None:
-        self.x = xdisplay.Display()
-        self.root = self.x.screen().root
-        self.out = outdir
-        self.atom = self.x.intern_atom
-
-    def pump(self, seconds: float) -> None:
-        end = time.time() + seconds
-        while time.time() < end:
-            while Gtk.events_pending():
-                Gtk.main_iteration_do(False)
-            time.sleep(0.02)
-
-    def _title(self, win) -> str | None:  # noqa: ANN001
-        try:
-            prop = win.get_full_property(self.atom("_NET_WM_NAME"), self.atom("UTF8_STRING"))
-            if prop is not None:
-                return bytes(prop.value).decode("utf-8", "replace")
-            name = win.get_wm_name()
-        except Exception:  # noqa: BLE001 — 視窗可能剛好關掉
-            return None
-        return name.decode() if isinstance(name, bytes) else name
-
-    def windows(self) -> list[tuple[object, str]]:
-        found: list[tuple[object, str]] = []
-        stack = [self.root]
-        while stack:
-            win = stack.pop()
-            try:
-                children = win.query_tree().children
-                viewable = win.get_attributes().map_state == X.IsViewable
-            except Exception:  # noqa: BLE001
-                continue
-            title = self._title(win)
-            if title and viewable and win != self.root:
-                found.append((win, title))
-            stack.extend(children)
-        return found
-
-    def find(self, match: Callable[[str], bool], timeout: float = 10.0):  # noqa: ANN201
-        end = time.time() + timeout
-        while time.time() < end:
-            for win, title in self.windows():
-                if match(title):
-                    return win
-            self.pump(0.1)
-        return None
-
-    def gone(self, match: Callable[[str], bool], timeout: float = 5.0) -> bool:
-        end = time.time() + timeout
-        while time.time() < end:
-            if not any(match(t) for _w, t in self.windows()):
-                return True
-            self.pump(0.1)
-        return False
-
-    def info(self, win) -> dict:  # noqa: ANN001
-        geo = win.get_geometry()
-        pos = self.root.translate_coords(win, 0, 0)
-        transient = win.get_full_property(self.atom("WM_TRANSIENT_FOR"), X.AnyPropertyType)
-        wtype = win.get_full_property(self.atom("_NET_WM_WINDOW_TYPE"), X.AnyPropertyType)
-        return {
-            "id": win.id,
-            "x": pos.x,
-            "y": pos.y,
-            "width": geo.width,
-            "height": geo.height,
-            "transient_for": int(transient.value[0]) if transient else None,
-            "types": [self.x.get_atom_name(a) for a in wtype.value] if wtype else [],
-            "title": self._title(win),
-        }
-
-    def popups(self) -> list[dict]:
-        """畫面上的彈出選單（override-redirect 視窗），由大到小。"""
-        found = []
-        for win in self.root.query_tree().children:
-            try:
-                attrs = win.get_attributes()
-                geo = win.get_geometry()
-            except Exception:  # noqa: BLE001 — 選單可能剛好關掉
-                continue
-            if attrs.override_redirect and attrs.map_state == X.IsViewable and geo.width > 50:
-                found.append({"x": geo.x, "y": geo.y, "width": geo.width, "height": geo.height})
-        return sorted(found, key=lambda r: r["width"] * r["height"], reverse=True)
-
-    def screenshot(self, name: str) -> str:
-        root = Gdk.get_default_root_window()
-        pb = Gdk.pixbuf_get_from_window(root, 0, 0, root.get_width(), root.get_height())
-        path = self.out / f"{name}.png"
-        pb.savev(str(path), "png", [], [])
-        return str(path)
-
-    def key(self, name: str) -> None:
-        code = self.x.keysym_to_keycode(XK.string_to_keysym(name))
-        xtest.fake_input(self.x, X.KeyPress, code)
-        self.x.sync()
-        time.sleep(0.05)
-        xtest.fake_input(self.x, X.KeyRelease, code)
-        self.x.sync()
-
-    def move(self, x: int, y: int) -> None:
-        xtest.fake_input(self.x, X.MotionNotify, x=int(x), y=int(y))
-        self.x.sync()
-
-    def click(self, x: int, y: int, button: int = 1) -> None:
-        self.move(x, y)
-        time.sleep(0.15)
-        xtest.fake_input(self.x, X.ButtonPress, button)
-        self.x.sync()
-        time.sleep(0.05)
-        xtest.fake_input(self.x, X.ButtonRelease, button)
-        self.x.sync()
-
-
-def colors_in(png: str, rect: dict) -> int:
-    """視窗範圍內有幾種顏色（確認真的畫出內容，不是一整片空白）。"""
-    from PIL import Image  # noqa: PLC0415
-
-    with Image.open(png) as img:
-        box = (rect["x"], rect["y"], rect["x"] + rect["width"], rect["y"] + rect["height"])
-        colors = img.convert("RGB").crop(box).getcolors(maxcolors=1 << 20)
-    return len(colors) if colors else 1 << 20
-
-
-# ------------------------------------------------------------------ D-Bus
-
-
-class Preview:
-    def __init__(self) -> None:
-        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-
-    def show(self, uri: str, xid: int = 0, close: bool = True) -> float:
-        start = time.time()
-        self.bus.call_sync(
-            *PREVIEW, "ShowFile", GLib.Variant("(sib)", (uri, xid, close)), None, 0, 30000, None
-        )
-        return round((time.time() - start) * 1000)
-
-    def close(self) -> None:
-        self.bus.call_sync(*PREVIEW, "Close", None, None, 0, 10000, None)
-
-    def owner_pid(self, name: str) -> int | None:
-        try:
-            res = self.bus.call_sync(
-                "org.freedesktop.DBus",
-                "/org/freedesktop/DBus",
-                "org.freedesktop.DBus",
-                "GetConnectionUnixProcessID",
-                GLib.Variant("(s)", (name,)),
-                None,
-                0,
-                5000,
-                None,
-            )
-        except GLib.Error:
-            return None
-        return int(res.unpack()[0])
-
-    def stop_service(self, name: str, bus_config: str) -> bool:
-        """結束私有工作階段裡的服務：先確認它是我們這次的 dbus-daemon 啟動的，才送結束訊號。"""
-        pid = self.owner_pid(name)
-        if pid is None:
-            return True
-        if not _started_by_our_bus(pid, bus_config):
-            raise RuntimeError(f"{name} 不是這個測試工作階段啟動的，不送訊號")
-        os.kill(pid, signal.SIGTERM)
-        end = time.time() + 15
-        while time.time() < end:
-            if not _alive(pid):
-                return True
-            time.sleep(0.1)
-        return False
-
-
-def _stat_fields(pid: int) -> list[str]:
-    raw = Path(f"/proc/{pid}/stat").read_text()
-    return raw[raw.rindex(")") + 2 :].split()  # 跳過「(程式名稱)」
-
-
-def _alive(pid: int) -> bool:
-    try:
-        return _stat_fields(pid)[0] != "Z"
-    except OSError:
-        return False
-
-
-def _started_by_our_bus(pid: int, _bus_config: str) -> bool:
-    """D-Bus 自動啟動的服務會帶 DBUS_STARTER_ADDRESS：必須是這次私有工作階段的位址，
-    而且 HOME 是測試的暫存家目錄（服務會被系統重新認養，不能用父程序判斷）。"""
-    try:
-        environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-    except OSError:
-        return False
-    entries = {e.decode(errors="replace") for e in environ if e}
-    address = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
-    home = os.environ.get("HOME", "")
-    return (
-        bool(address) and f"DBUS_STARTER_ADDRESS={address}" in entries and f"HOME={home}" in entries
-    )
-
-
-def uri_of(path: str) -> str:
-    return Gio.File.new_for_path(path).get_uri()
-
-
-# ------------------------------------------------------------------ 預覽視窗的情境
+# ------------------------------------------------------------------ 預覽視窗
 
 
 def show_and_capture(d: Desktop, p: Preview, uri: str, title: str, name: str, **kw) -> dict:
-    settle = kw.pop("settle", 1.5)
+    min_colors = kw.pop("min_colors", 3)
+    stable = kw.pop("stable", True)
+    settle_timeout = kw.pop("settle_timeout", 25.0)
     reply_ms = p.show(uri, **kw)
-    win = d.find(lambda t: t == title, timeout=20)
+    win = d.find(_is(title), timeout=20)
     if win is None:
         return {"shown": False, "reply_ms": reply_ms, "titles": [t for _w, t in d.windows()]}
-    d.pump(settle)
+    colors = d.settle(win, min_colors, stable, timeout=settle_timeout)
     info = d.info(win)
     shot = d.screenshot(name)
     titles = sorted(t for _w, t in d.windows())
-    colors = colors_in(shot, info)
+    region = Region(info)
     return {
         "shown": True,
         "reply_ms": reply_ms,
         "shot": shot,
         "colors": colors,
+        "dark_ratio": region.dark_ratio(),
         "all_titles": titles,
         **info,
     }
 
 
+def _show(d: Desktop, p: Preview, f: dict, key: str, **kw) -> dict:
+    return show_and_capture(d, p, uri_of(f[key]), Path(f[key]).name, key, **kw)
+
+
+def scenario_basics(d: Desktop, p: Preview, f: dict) -> dict:
+    r: dict = {}
+    r["text"] = _show(d, p, f, "text", min_colors=10)
+    r["image"] = _show(d, p, f, "image", min_colors=50)
+    r["gif"] = _show(d, p, f, "gif", stable=False)
+    r["pdf"] = _show(d, p, f, "pdf", min_colors=10)
+    r["video"] = _show(d, p, f, "video", min_colors=20, stable=False)
+    p.show(uri_of(f["video"]))  # 同一個檔案再按一次：關閉
+    r["same_file_closes"] = d.gone(_is(Path(f["video"]).name))
+    r["audio"] = _show(d, p, f, "audio", stable=False)
+    r["fifo"] = _show(d, p, f, "fifo")
+    r["folder"] = _show(d, p, f, "folder")
+    r["invalid"] = show_and_capture(d, p, "not-a-uri", "QUICK_SEEMD", "invalid")
+    r["http"] = show_and_capture(d, p, f["http_uri"], "遠端文件.txt", "http")
+    r["office"] = _show(d, p, f, "office", min_colors=10, settle_timeout=40)
+    p.close()
+    r["close_method"] = d.gone(_is(Path(f["office"]).name))
+    return r
+
+
+def scenario_engine_pages(d: Desktop, p: Preview, f: dict) -> dict:
+    """真正的預覽核心產生的各種頁面。"""
+    return {key: _show(d, p, f, key, min_colors=8) for key in f["engine_pages"]}
+
+
+def scenario_font_and_stream(d: Desktop, p: Preview, f: dict) -> dict:
+    r = {"font": _show(d, p, f, "font", min_colors=3)}
+    r["hls"] = _show(d, p, f, "hls")
+    p.close()
+    d.gone(_is(Path(f["hls"]).name))
+    return r
+
+
 def _closes_with(d: Desktop, p: Preview, uri: str, title: str, key: str) -> bool:
     p.show(uri)
-    if d.find(lambda t: t == title, timeout=15) is None:
+    win = d.find(_is(title))
+    if win is None or not wait_until(lambda: d.focused(win), 10):
         return False
-    d.pump(1.0)
     d.key(key)
-    return d.gone(lambda t: t == title, timeout=5)
+    return d.gone(_is(title))
+
+
+def _width(d: Desktop, win, want_full: bool):  # noqa: ANN001, ANN202
+    info = d.info(win)
+    full = info["width"] == d.root.get_geometry().width
+    return info if full == want_full else None
+
+
+def scenario_keys(d: Desktop, p: Preview, f: dict) -> dict:
+    text_uri, title = uri_of(f["text"]), Path(f["text"]).name
+    r: dict = {k: _closes_with(d, p, text_uri, title, k) for k in ("space", "Escape", "q")}
+    image = Path(f["image"]).name
+    p.show(uri_of(f["image"]))
+    win = d.find(_is(image))
+    if win is not None and wait_until(lambda: d.focused(win), 10):
+        d.key("f")
+        r["fullscreen"] = wait_until(lambda: _width(d, win, True), 10)
+        r["fullscreen_shot"] = d.screenshot("fullscreen")
+        d.key("f")
+        r["unfullscreen"] = wait_until(lambda: _width(d, win, False), 10)
+    p.close()
+    d.gone(_is(image))
+    return r
+
+
+def _button_region(info: dict) -> dict:
+    return {"x": info["x"] + 15, "y": info["y"] + info["height"] - 38, "width": 24, "height": 24}
+
+
+def scenario_media_controls(d: Desktop, p: Preview, f: dict) -> dict:
+    """播完後按鈕變成「播放」；按下從頭播（變回「暫停」）；再按暫停；在進度條上點一下。"""
+    title = Path(f["short_audio"]).name
+    p.show(uri_of(f["short_audio"]))
+    win = d.find(_is(title))
+    if win is None:
+        return {"shown": False}
+    d.settle(win, 3, stable=False)
+    info = d.info(win)
+    button = _button_region(info)
+    playing = Region(button).digest
+    r = {"shown": True}
+    r["ended"] = bool(wait_until(lambda: Region(button).digest != playing, 15))
+    center = (button["x"] + 12, button["y"] + 12)
+    away = (info["x"] + info["width"] // 2, info["y"] + info["height"] // 3)
+
+    def press() -> None:  # 點完把滑鼠移開，按鈕的「滑過」底色才不會影響比對
+        d.click(*center)
+        d.move(*away)
+
+    press()
+    r["replaying"] = bool(wait_until(lambda: Region(button).digest == playing, 5))
+    press()
+    r["paused"] = bool(wait_until(lambda: Region(button).digest != playing, 5))
+    d.click(info["x"] + info["width"] // 2, center[1])
+    r["still_open"] = d.find(_is(title), timeout=2) is not None
+    r["shot"] = d.screenshot("media-controls")
+    p.close()
+    d.gone(_is(title))
+    return r
+
+
+def scenario_rapid(d: Desktop, p: Preview, f: dict) -> dict:
+    text, pdf, big = (Path(f[k]).name for k in ("text", "pdf", "big"))
+    r: dict = {}
+    p.show(uri_of(f["text"]))
+    p.show(uri_of(f["pdf"]))
+    win = d.find(_is(pdf))
+    r["switch_final_title"] = d.info(win)["title"] if win else None
+    r["stale_title_absent"] = not any(t == text for _w, t in d.windows())
+    p.close()
+    d.gone(_is(pdf))
+    d.seen_titles.clear()
+    p.show(uri_of(f["big"]))
+    p.show(uri_of(f["big"]))  # 內容還沒準備好就再按一次
+    p.show(uri_of(f["text"]))  # 服務照順序處理：這個出現時，前兩個一定處理完了
+    r["after_double_press"] = d.find(_is(text)) is not None
+    r["double_press_closed"] = big not in d.seen_titles
+    p.close()
+    d.gone(_is(text))
+    return r
 
 
 def _parent_window(d: Desktop) -> tuple[Gtk.Window, int]:
@@ -284,240 +193,134 @@ def _parent_window(d: Desktop) -> tuple[Gtk.Window, int]:
     parent.set_default_size(700, 500)
     parent.move(40, 60)
     parent.show_all()
-    d.pump(1.0)
+    d.find(_is("父視窗"), timeout=10)
     return parent, GdkX11.X11Window.get_xid(parent.get_window())
-
-
-def scenario_basics(d: Desktop, p: Preview, f: dict) -> dict:
-    r: dict = {}
-    r["text"] = show_and_capture(d, p, uri_of(f["text"]), Path(f["text"]).name, "text", settle=2.5)
-    r["image"] = show_and_capture(d, p, uri_of(f["image"]), Path(f["image"]).name, "image")
-    r["gif"] = show_and_capture(d, p, uri_of(f["gif"]), Path(f["gif"]).name, "gif", settle=1)
-    r["pdf"] = show_and_capture(d, p, uri_of(f["pdf"]), Path(f["pdf"]).name, "pdf", settle=2)
-    r["video"] = show_and_capture(
-        d, p, uri_of(f["video"]), Path(f["video"]).name, "video", settle=3
-    )
-    p.show(uri_of(f["video"]))  # 同一個檔案再按一次：關閉
-    r["same_file_closes"] = d.gone(lambda t: t == Path(f["video"]).name, timeout=5)
-    r["audio"] = show_and_capture(
-        d, p, uri_of(f["audio"]), Path(f["audio"]).name, "audio", settle=2
-    )
-    r["fifo"] = show_and_capture(d, p, uri_of(f["fifo"]), Path(f["fifo"]).name, "fifo", settle=2)
-    r["folder"] = show_and_capture(d, p, uri_of(f["folder"]), Path(f["folder"]).name, "folder")
-    r["invalid"] = show_and_capture(d, p, "not-a-uri", "QUICK_SEEMD", "invalid")
-    r["office"] = show_and_capture(
-        d, p, uri_of(f["office"]), Path(f["office"]).name, "office", settle=8
-    )
-    p.close()
-    r["close_method"] = d.gone(lambda t: t == Path(f["office"]).name, timeout=5)
-    return r
-
-
-def scenario_keys(d: Desktop, p: Preview, f: dict) -> dict:
-    text_uri, title = uri_of(f["text"]), Path(f["text"]).name
-    r = {k: _closes_with(d, p, text_uri, title, k) for k in ("space", "Escape", "q")}
-    p.show(uri_of(f["image"]))
-    win = d.find(lambda t: t == Path(f["image"]).name, timeout=15)
-    d.pump(1.0)
-    d.key("f")
-    d.pump(1.5)
-    r["fullscreen"] = d.info(win) if win else None
-    r["fullscreen_shot"] = d.screenshot("fullscreen")
-    d.key("f")
-    d.pump(1.5)
-    r["unfullscreen"] = d.info(win) if win else None
-    p.close()
-    d.gone(lambda t: t == Path(f["image"]).name)
-    return r
-
-
-def scenario_media_controls(d: Desktop, p: Preview, f: dict) -> dict:
-    """播放控制：播完後按播放（從頭開始）、暫停、在進度條上點一下（跳到那裡）。"""
-    title = Path(f["audio"]).name
-    p.show(uri_of(f["audio"]))
-    win = d.find(lambda t: t == title, timeout=15)
-    if win is None:
-        return {"shown": False}
-    d.pump(6.0)  # 4 秒的聲音：等它播完
-    info = d.info(win)
-    bottom = info["y"] + info["height"] - 26
-    d.click(info["x"] + 27, bottom)  # 播放（從頭開始）
-    d.pump(1.0)
-    d.click(info["x"] + 27, bottom)  # 暫停
-    d.pump(0.5)
-    d.click(info["x"] + info["width"] // 2, bottom)  # 點進度條中間
-    d.pump(1.0)
-    shot = d.screenshot("media-controls")
-    still = d.find(lambda t: t == title, timeout=2) is not None
-    p.close()
-    d.gone(lambda t: t == title)
-    return {"shown": True, "still_open": still, "shot": shot}
-
-
-def scenario_rapid(d: Desktop, p: Preview, f: dict) -> dict:
-    r: dict = {}
-    p.show(uri_of(f["text"]))
-    p.show(uri_of(f["pdf"]))
-    win = d.find(lambda t: t == Path(f["pdf"]).name, timeout=15)
-    d.pump(1.5)
-    r["switch_final_title"] = d.info(win)["title"] if win else None
-    r["stale_title_absent"] = not any(t == Path(f["text"]).name for _w, t in d.windows())
-    p.close()
-    d.gone(lambda t: t == Path(f["pdf"]).name)
-    big = uri_of(f["big"])
-    p.show(big)
-    p.show(big)  # 內容還沒準備好就再按一次
-    d.pump(3.0)
-    r["double_press_closed"] = not any(t == Path(f["big"]).name for _w, t in d.windows())
-    return r
 
 
 def scenario_transient(d: Desktop, p: Preview, f: dict) -> dict:
     parent, xid = _parent_window(d)
     r = show_and_capture(d, p, uri_of(f["text"]), Path(f["text"]).name, "transient", xid=xid)
     r["parent_xid"] = xid
-    r["parent"] = d.info(d.find(lambda t: t == "父視窗", timeout=5))
+    r["parent"] = d.info(d.find(_is("父視窗"), timeout=5))
     d.key("Escape")
-    r["closed"] = d.gone(lambda t: t == Path(f["text"]).name)
+    r["closed"] = d.gone(_is(Path(f["text"]).name))
     parent.destroy()
-    d.pump(0.5)
+    d.gone(_is("父視窗"))
     return r
 
 
 def scenario_open_button(d: Desktop, p: Preview, f: dict, marker: Path) -> dict:
+    title = Path(f["text"]).name
     p.show(uri_of(f["text"]))
-    win = d.find(lambda t: t == Path(f["text"]).name, timeout=15)
+    win = d.find(_is(title))
     if win is None:
         return {"shown": False}
-    d.pump(1.5)
+    d.settle(win, 10, stable=True)
     info = d.info(win)
     d.click(info["x"] + info["width"] - 118, info["y"] + 24)
-    end = time.time() + 10
-    while time.time() < end and not marker.exists():
-        d.pump(0.2)
+    wait_until(marker.exists, 10)
     opened = marker.read_text("utf-8").strip() if marker.exists() else ""
-    return {"opened": opened, "closed": d.gone(lambda t: t == Path(f["text"]).name, timeout=5)}
+    return {"opened": opened, "closed": d.gone(_is(title))}
 
 
 def run_preview(cfg: dict, d: Desktop) -> dict:
     p = Preview()
     f = cfg["files"]
     report = {"basics": scenario_basics(d, p, f)}
+    report["engine"] = scenario_engine_pages(d, p, f)
+    report["font_stream"] = scenario_font_and_stream(d, p, f)
     report["keys"] = scenario_keys(d, p, f)
-    report["rapid"] = scenario_rapid(d, p, f)
     report["media"] = scenario_media_controls(d, p, f)
+    report["rapid"] = scenario_rapid(d, p, f)
     report["transient"] = scenario_transient(d, p, f)
     report["open_button"] = scenario_open_button(d, p, f, Path(cfg["marker"]))
-    report["service_stopped"] = p.stop_service(PREVIEW[0], cfg["bus_config"])
+    report["service_stopped"] = p.stop_service("org.nemo.Preview")
     return report
 
 
-# ------------------------------------------------------------------ Nemo 的情境
+# ------------------------------------------------------------------ Nemo
 
 
-def ocr_find(png: str, rect: dict, word: str) -> tuple[int, int] | None:
-    """在畫面的某個範圍裡（放大兩倍後）用 tesseract 找某個字，回傳它在畫面上的中心點。"""
-    from PIL import Image  # noqa: PLC0415
-
-    scale = 2
-    crop = Path(png).with_name(Path(png).stem + "-crop.png")
-    with Image.open(png) as img:
-        box = (rect["x"], rect["y"], rect["x"] + rect["width"], rect["y"] + rect["height"])
-        part = img.convert("RGB").crop(box)
-        part.resize((part.width * scale, part.height * scale), Image.LANCZOS).save(crop)
-    res = subprocess.run(
-        ["/usr/bin/tesseract", str(crop), "stdout", "-l", "eng", "tsv"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    for line in res.stdout.splitlines()[1:]:
-        cols = line.split("\t")
-        if len(cols) == 12 and word in cols[11].upper():
-            left, top, width, height = (int(v) for v in cols[6:10])
-            return (
-                rect["x"] + (left + width // 2) // scale,
-                rect["y"] + (top + height // 2) // scale,
-            )
-    return None
+def _read_log(path: Path) -> list:
+    if not path.exists():
+        return []
+    return [json.loads(ln) for ln in path.read_text("utf-8").splitlines() if ln]
 
 
-def _wait_log(path: Path, timeout: float, d: Desktop) -> list:
-    end = time.time() + timeout
-    while time.time() < end:
-        if path.exists() and path.read_text("utf-8").strip():
-            return [json.loads(ln) for ln in path.read_text("utf-8").splitlines() if ln]
-        d.pump(0.2)
-    return []
+def _focus_nemo(d: Desktop, nemo_win, info: dict) -> bool:  # noqa: ANN001
+    """點一下空白處（openbox 第一下只會讓視窗取得焦點），等 Nemo 真的拿到焦點。"""
+    spot = (info["x"] + info["width"] * 3 // 4, info["y"] + info["height"] * 3 // 4)
+    for _ in range(3):
+        d.click(*spot)
+        if wait_until(lambda: d.focused(nemo_win), 3):
+            return True
+    return False
 
 
 def nemo_preview_steps(d: Desktop, nemo_win, cfg: dict) -> dict:  # noqa: ANN001
     r: dict = {"nemo": d.info(nemo_win)}
-    info = r["nemo"]
-    d.click(info["x"] + info["width"] * 3 // 4, info["y"] + info["height"] * 3 // 4)
-    d.pump(0.5)
-    d.click(info["x"] + info["width"] * 3 // 4, info["y"] + info["height"] * 3 // 4)
-    d.pump(0.5)
+    r["nemo_focused"] = _focus_nemo(d, nemo_win, r["nemo"])
     d.key("Home")
-    d.pump(0.8)
-    r["selected_shot"] = d.screenshot("nemo-selected")
-    d.key("space")
     title = Path(cfg["first"]).name
-    win = d.find(lambda t: t == title, timeout=20)
+    win = None
+    for _ in range(3):  # 選取第一個檔案、按空白鍵，直到預覽出現
+        d.key("space")
+        win = d.find(_is(title), timeout=8)
+        if win is not None:
+            break
+        d.key("Home")
     r["preview_shown"] = win is not None
     if win is not None:
-        d.pump(2.0)
+        d.settle(win, 10, stable=True)
         r["preview"] = d.info(win)
         r["preview_shot"] = d.screenshot("nemo-preview")
+        wait_until(lambda: d.focused(win), 10)
         d.key("space")
-        r["preview_closed"] = d.gone(lambda t: t == title, timeout=5)
+        r["preview_closed"] = d.gone(_is(title))
     return r
 
 
-def nemo_menu_steps(d: Desktop, cfg: dict) -> dict:
-    r: dict = {}
-    d.pump(1.0)
+def nemo_menu_steps(d: Desktop, nemo_win, cfg: dict) -> dict:  # noqa: ANN001
+    r: dict = {"refocused": bool(wait_until(lambda: d.focused(nemo_win), 10))}
     d.key("Menu")
-    d.pump(1.5)
+    menus = wait_until(d.popups, 10) or []
+    r["popups"] = menus
     shot = d.screenshot("nemo-menu")
     r["menu_shot"] = shot
-    menus = d.popups()
-    r["popups"] = menus
-    if not menus:
-        return r
-    spot = ocr_find(shot, menus[0], "SEEMD") or ocr_find(shot, menus[0], "QUICK")
+    spot = (
+        (ocr_find(shot, menus[0], "SEEMD") or ocr_find(shot, menus[0], "QUICK")) if menus else None
+    )
     r["menu_item_found"] = spot is not None
     if spot is None:
         return r
     d.move(*spot)
-    d.pump(1.5)
+    r["submenu_opened"] = bool(wait_until(lambda: len(d.popups()) >= 2, 10))
     r["submenu_shot"] = d.screenshot("nemo-submenu")
     d.key("Right")
-    d.pump(0.5)
     d.key("Return")
-    r["agent_calls"] = _wait_log(Path(cfg["agent_log"]), 15, d)
+    log_path = Path(cfg["agent_log"])
+    r["agent_calls"] = wait_until(lambda: _read_log(log_path), 15) or []
     return r
 
 
 def run_nemo(cfg: dict, d: Desktop) -> dict:
-    nemo = subprocess.Popen(  # noqa: S603
-        ["/usr/bin/nemo", "--no-desktop", cfg["folder"]],
-        stdout=open(cfg["nemo_log"], "w"),  # noqa: SIM115
-        stderr=subprocess.STDOUT,
-    )
+    with open(cfg["nemo_log"], "w", encoding="utf-8") as log_file:
+        nemo = subprocess.Popen(  # noqa: S603
+            ["/usr/bin/nemo", "--no-desktop", cfg["folder"]], stdout=log_file, stderr=log_file
+        )
     report: dict = {}
     try:
         folder = Path(cfg["folder"]).name
         win = d.find(lambda t: folder in t, timeout=30)
         report["nemo_started"] = win is not None
         if win is not None:
-            d.pump(2.0)
+            d.settle(win, 10, stable=True)
             report["start_shot"] = d.screenshot("nemo-start")
             report.update(nemo_preview_steps(d, win, cfg))
-            report.update(nemo_menu_steps(d, cfg))
+            report.update(nemo_menu_steps(d, win, cfg))
     finally:
         d.key("Escape")
-        report["service_stopped"] = Preview().stop_service(PREVIEW[0], cfg["bus_config"])
+        report["service_stopped"] = Preview().stop_service("org.nemo.Preview")
         nemo.terminate()
         try:
             nemo.wait(timeout=10)
@@ -551,7 +354,7 @@ def fake_agent(log_path: str) -> None:
     Gio.bus_own_name(
         Gio.BusType.SESSION, ipc.AGENT_BUS_NAME, 0, on_bus, None, lambda *_a: loop.quit()
     )
-    GLib.timeout_add_seconds(180, loop.quit)
+    GLib.timeout_add_seconds(180, loop.quit)  # 保險：測試忘了結束時自己離開
     loop.run()
 
 
@@ -559,7 +362,7 @@ def fake_agent(log_path: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    _check_display()
+    check_display()
     if argv[1] == "fake-agent":
         fake_agent(argv[2])
         return 0
@@ -569,9 +372,9 @@ def main(argv: list[str]) -> int:
     openbox = subprocess.Popen(["/usr/bin/openbox", "--sm-disable"])  # noqa: S603
     report: dict = {}
     try:
-        time.sleep(1.0)
         d = Desktop(out)
-        report = run_preview(cfg, d) if argv[1] == "preview" else run_nemo(cfg, d)
+        report["wm_ready"] = d.wm_ready()
+        report.update(run_preview(cfg, d) if argv[1] == "preview" else run_nemo(cfg, d))
     except Exception:  # noqa: BLE001 — 把錯誤寫進報告，測試端會顯示
         report["error"] = traceback.format_exc()
     finally:

@@ -102,7 +102,7 @@ def write_service(s: Session, name: str, exec_line: str) -> None:
 
 def run_driver(s: Session, scenario: str, cfg: dict, timeout: int = 300) -> dict:
     report = s.root / f"report-{scenario}.json"
-    cfg = dict(cfg, outdir=str(s.shots), report=str(report), bus_config=str(s.bus_config))
+    cfg = dict(cfg, outdir=str(s.shots), report=str(report))
     cfg_path = s.root / f"config-{scenario}.json"
     cfg_path.write_text(json.dumps(cfg, ensure_ascii=False), "utf-8")
     log = s.root / f"driver-{scenario}.log"

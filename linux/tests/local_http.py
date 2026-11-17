@@ -66,3 +66,14 @@ class RecordingServer:
     def __exit__(self, *_exc: object) -> None:
         self._server.shutdown()
         self._server.server_close()
+
+
+def hls_disguised_as_mp3(path, server: RecordingServer):  # noqa: ANN001, ANN201
+    """副檔名是 .mp3、內容其實是指向測試伺服器的 HLS 播放清單。"""
+    playlist = (
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n"
+        f"#EXTINF:10.0,\n{server.url('/segment0.ts')}\n"
+        f"#EXTINF:10.0,\n{server.url('/segment1.ts')}\n#EXT-X-ENDLIST\n"
+    )
+    path.write_text(playlist, "utf-8")
+    return path

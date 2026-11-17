@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from local_http import RecordingServer
+from local_http import RecordingServer, hls_disguised_as_mp3
 
 import conftest
 
@@ -62,16 +62,6 @@ def _play(path: Path, guarded: bool) -> dict:
     )
     assert res.returncode == 0, res.stderr[-3000:]
     return json.loads(res.stdout.strip().splitlines()[-1])
-
-
-def hls_disguised_as_mp3(path: Path, server: RecordingServer) -> Path:
-    playlist = (
-        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n"
-        f"#EXTINF:10.0,\n{server.url('/segment0.ts')}\n"
-        f"#EXTINF:10.0,\n{server.url('/segment1.ts')}\n#EXT-X-ENDLIST\n"
-    )
-    path.write_text(playlist, "utf-8")
-    return path
 
 
 @pytest.mark.slow

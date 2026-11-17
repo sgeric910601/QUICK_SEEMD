@@ -91,3 +91,26 @@ def test_filter_rules_block_everything_but_the_scheme():
     assert rules[0] == {"trigger": {"url-filter": ".*"}, "action": {"type": "block"}}
     assert rules[1]["action"] == {"type": "ignore-previous-rules"}
     assert rules[1]["trigger"]["url-filter"] == "^qs-preview://doc/"
+
+
+def test_real_font_specimen_is_served_with_font_mime(tmp_path):
+    """預覽核心的字型樣張以 @font-face 引用 cid:font-file：改寫後要能用自訂網址拿到字型檔。"""
+    import shutil  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from quickseemd.core import preview  # noqa: PLC0415
+
+    system_font = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+    if not system_font.is_file():
+        import pytest  # noqa: PLC0415
+
+        pytest.skip("沒有可以借用的 TTF")
+    font = tmp_path / "樣張.ttf"
+    shutil.copyfile(system_font, font)
+    page = scheme.build_page(preview.render_font(font), 11)
+    assert "url(qs-preview://doc/att/font-file?v=11)" in page.html
+    assert "cid:font-file" not in page.html
+    res = scheme.lookup("qs-preview://doc/att/font-file?v=11", {11: page})
+    assert res is not None
+    assert res.mime == "font/ttf"
+    assert res.data == font.read_bytes()

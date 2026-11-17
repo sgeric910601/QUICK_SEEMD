@@ -5,10 +5,13 @@
 
 from __future__ import annotations
 
+import json
 import os
+import zipfile
 from pathlib import Path
 
 import pytest
+from local_http import RecordingServer, hls_disguised_as_mp3
 from previewer_gui_support import Session, make_session, run_driver, write_service
 
 import conftest
@@ -18,7 +21,7 @@ pytestmark = [pytest.mark.gui, pytest.mark.slow]
 TEXT = "第一行：中文預覽測試\nsecond line\n" + "\n".join(f"第 {i} 行" for i in range(3, 60))
 
 
-def _make_files(root: Path) -> dict[str, str]:
+def _make_files(root: Path, server: RecordingServer) -> dict[str, str]:
     import docx  # noqa: PLC0415
 
     files = root / "檔案"
@@ -39,6 +42,11 @@ def _make_files(root: Path) -> dict[str, str]:
     gif = files / "動畫.gif"
     _make_gif(gif)
     return {
+        **_engine_files(files, server),
+        "hls": str(hls_disguised_as_mp3(files / "track01.mp3", server)),
+        "http_uri": server.url("/遠端文件.txt"),
+        "font": str(make_block_font(files / "方塊字型.ttf")),
+        "short_audio": str(conftest.make_audio(files / "短聲音.wav", seconds=2)),
         "gif": str(gif),
         "text": str(text),
         "big": str(big),
@@ -50,6 +58,62 @@ def _make_files(root: Path) -> dict[str, str]:
         "fifo": str(fifo),
         "office": str(files / "報告.docx"),
     }
+
+
+def make_block_font(path: Path) -> Path:
+    """每個字都是實心方塊的字型：真的載入時樣張會是一大片黑色，用像素就能判斷。"""
+    from fontTools.fontBuilder import FontBuilder  # noqa: PLC0415
+    from fontTools.pens.ttGlyphPen import TTGlyphPen  # noqa: PLC0415
+
+    from quickseemd.core.preview import font  # noqa: PLC0415
+
+    chars = set("".join(font.GLYPHS + font.SAMPLES)) - {" "}
+    builder = FontBuilder(1000, isTTF=True)
+    builder.setupGlyphOrder([".notdef", "space", "block"])
+    cmap = {ord(c): "block" for c in chars}
+    cmap[32] = "space"
+    builder.setupCharacterMap(cmap)
+    pen = TTGlyphPen(None)
+    pen.moveTo((0, -200))
+    pen.lineTo((0, 800))
+    pen.lineTo((1000, 800))
+    pen.lineTo((1000, -200))
+    pen.closePath()
+    empty = TTGlyphPen(None).glyph()
+    builder.setupGlyf({".notdef": empty, "space": empty, "block": pen.glyph()})
+    builder.setupHorizontalMetrics({".notdef": (500, 0), "space": (500, 0), "block": (1000, 0)})
+    builder.setupHorizontalHeader(ascent=800, descent=-200)
+    builder.setupNameTable({"familyName": "QSBlocks", "styleName": "Regular"})
+    builder.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
+    builder.setupPost()
+    builder.save(str(path))
+    return path
+
+
+def _engine_files(files: Path, server: RecordingServer) -> dict[str, str]:
+    """交給真正預覽核心的檔案（Markdown 有本機與網路圖片、程式碼、表格、JSON、壓縮檔）。"""
+    pic = conftest.make_image(files / "插圖.png", size=(200, 120))
+    md = files / "說明文件.md"
+    md.write_text(
+        f"# 預覽測試\n\n本機圖片：![插圖]({pic.name})\n\n"
+        f"網路圖片（不能載入）：![遠端]({server.url('/remote.png')})\n\n"
+        "<script>document.title='壞'</script>\n\n```python\nprint('你好')\n```\n",
+        "utf-8",
+    )
+    code = files / "程式.py"
+    code.write_text("def 問候(名字: str) -> str:\n    return f'你好，{名字}'\n" * 20, "utf-8")
+    csv = files / "表格.csv"
+    csv.write_text("名稱,數量\n" + "".join(f"項目{i},{i * 3}\n" for i in range(40)), "utf-8")
+    data = files / "資料.json"
+    data.write_text(json.dumps({"名稱": "測試", "清單": list(range(30))}, ensure_ascii=False))
+    archive = files / "壓縮檔.zip"
+    with zipfile.ZipFile(archive, "x") as z:
+        for i in range(12):
+            z.writestr(f"資料夾/檔案{i}.txt", "內容" * i)
+    keys = {"markdown": md, "code": code, "csv": csv, "json": data, "zip": archive}
+    out = {k: str(v) for k, v in keys.items()}
+    out["engine_pages"] = sorted(keys)  # type: ignore[assignment]
+    return out
 
 
 def _make_gif(path: Path) -> None:
@@ -79,15 +143,17 @@ def _fake_default_app(s: Session, marker: Path) -> None:
 @pytest.fixture(scope="module")
 def report(tmp_path_factory: pytest.TempPathFactory) -> dict:
     s = make_session(tmp_path_factory.mktemp("gui"))
-    files = _make_files(s.root)
     marker = s.root / "opened.txt"
     _fake_default_app(s, marker)
     write_service(
         s, "org.nemo.Preview", "/usr/bin/python3 -m quickseemd.previewer"
     )  # PYTHONPATH 指向這份原始碼（環境變數由 run_driver 設定）
-    data = run_driver(s, "preview", {"files": files, "marker": str(marker)})
+    with RecordingServer() as server:  # 預覽過程中任何連到這裡的請求都是錯誤
+        files = _make_files(s.root, server)
+        data = run_driver(s, "preview", {"files": files, "marker": str(marker)})
     assert "error" not in data, data.get("error")
     data["_files"] = files
+    data["_network"] = {"requests": server.requests, "connections": server.connections}
     return data
 
 
@@ -123,9 +189,13 @@ def test_animated_gif_preview(report):
     assert r["width"] >= 320
 
 
-def test_media_controls_do_not_break_the_window(report):
+def test_media_controls(report):
     r = report["media"]
-    assert r["shown"] and r["still_open"]
+    assert r["shown"]
+    assert r["ended"]  # 播完：按鈕變成「播放」
+    assert r["replaying"]  # 按下：從頭播放（變回「暫停」）
+    assert r["paused"]
+    assert r["still_open"]
 
 
 def test_pdf_preview(report):
@@ -176,6 +246,7 @@ def test_rapid_switch_and_double_press(report):
     r = report["rapid"]
     assert r["switch_final_title"] == "文件.pdf"
     assert r["stale_title_absent"]
+    assert r["after_double_press"]
     assert r["double_press_closed"]
 
 
@@ -201,3 +272,34 @@ def test_open_with_default_app(report):
 
 def test_service_stops_cleanly(report):
     assert report["service_stopped"]
+
+
+@pytest.mark.parametrize("key", ["markdown", "code", "csv", "json", "zip"])
+def test_real_preview_engine_pages(report, key: str):
+    _assert_page(report["engine"][key], min_colors=8)
+
+
+def test_font_specimen_uses_the_embedded_font(report):
+    """字型檔透過自訂網址提供並真的套用：方塊字型讓樣張變成一大片黑色。"""
+    font = report["font_stream"]["font"]
+    _assert_page(font)
+    baseline = report["basics"]["text"]["dark_ratio"]
+    assert font["dark_ratio"] > 0.15, font["dark_ratio"]
+    assert font["dark_ratio"] > 3 * baseline
+
+
+def test_unsupported_uri_is_refused(report):
+    _assert_page(report["basics"]["http"])
+
+
+def test_hls_disguised_as_mp3_shows_error(report):
+    _assert_page(report["font_stream"]["hls"])
+
+
+def test_nothing_touched_the_network(report):
+    """HLS 偽裝檔、http 網址、Markdown 裡的網路圖片：測試伺服器都不能收到任何連線。"""
+    assert report["_network"] == {"requests": [], "connections": 0}
+
+
+def test_window_manager_was_ready(report):
+    assert report["wm_ready"]
