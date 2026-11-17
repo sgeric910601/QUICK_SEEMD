@@ -539,7 +539,11 @@ def test_link_cost_of_loops_and_folders():
         "dir": member("dir", tarfile.DIRTYPE),
         "f": member("f", tarfile.REGTYPE, size=9),
     }
-    assert _member_cost(by_key["l1"], by_key) == 0
+    # 繞圈的連結一律拒絕（不能算成 0 而繞過容量上限）
+    from quickseemd.core.tools.other.archivekind import UnsafeEntry
+
+    with pytest.raises(UnsafeEntry):
+        _member_cost(by_key["l1"], by_key)
     assert _member_cost(member("x", tarfile.SYMTYPE, "dir"), by_key) == 0
     assert _member_cost(member("y", tarfile.SYMTYPE, "f"), by_key) == 9
     assert _member_cost(by_key["dir"], by_key) == 0

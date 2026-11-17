@@ -442,7 +442,10 @@ MAX_LINK_HOPS = 40
 
 
 def _resolved_size(key: str, by_key: dict[str, tarfile.TarInfo]) -> int:
-    """順著連結找到最後的一般檔案，回傳它的大小（tarfile 不支援連結時會複製這份內容）。"""
+    """順著連結找到最後的一般檔案，回傳它的大小（tarfile 不支援連結時會複製這份內容）。
+
+    連結繞圈或超過 MAX_LINK_HOPS 層時一律拒絕（不能算成 0 而繞過容量上限）。
+    """
     for _hop in range(MAX_LINK_HOPS):
         member = by_key.get(key)
         if member is None:
@@ -452,7 +455,7 @@ def _resolved_size(key: str, by_key: dict[str, tarfile.TarInfo]) -> int:
         if not (member.islnk() or member.issym()):
             return 0
         key = _link_key(member)
-    return 0
+    raise UnsafeEntry(key)
 
 
 def _member_cost(member: tarfile.TarInfo, by_key: dict[str, tarfile.TarInfo]) -> int:
@@ -548,8 +551,10 @@ def extract_tar(path: Path, root: Path, ctx: ToolContext, budget: Budget) -> Non
         raise NeedExternal from exc
     with tf:
         plan = _scan_tar(tf, budget)
-        for i, (member, _cost) in enumerate(plan):
+        for i, (member, cost) in enumerate(plan):
             ctx.check_cancelled()
+            if member.islnk() or member.issym():
+                budget.check(extra_disk=cost)  # 連結可能被複製成實體檔案：寫之前先確認放得下
             _extract_member(tf, member, root)
             budget.charge(_written_bytes(member, root))
             ctx.progress((i + 1) / len(plan))

@@ -842,3 +842,19 @@ def test_library_symlink_chain_is_allowed(indir, outdir):
     [out] = _run([z], outdir)
     assert out == outdir / "pkg"
     assert (out / "bin" / "x").read_text() == "ELF"
+
+
+def test_symlink_loop_fails_closed(tmp_path):
+    """連結繞圈（或超過層數上限）不能算成 0 而繞過容量上限，要拒絕。"""
+    import tarfile as _tarfile
+
+    from quickseemd.core.tools.other import archivekind, unpack
+
+    by_key = {}
+    for name, target in (("a", "b"), ("b", "a")):
+        info = _tarfile.TarInfo(name)
+        info.type = _tarfile.SYMTYPE
+        info.linkname = target
+        by_key[name] = info
+    with pytest.raises(archivekind.UnsafeEntry):
+        unpack._resolved_size("a", by_key)
