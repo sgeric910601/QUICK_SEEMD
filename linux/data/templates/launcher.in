@@ -1,0 +1,6 @@
+#!/bin/bash
+# QUICK_SEEMD 啟動檔（install.sh 產生，解除安裝時會一併移除）。
+# 一律用系統的 Python 與安裝好的程式，不受目前環境（conda、虛擬環境）影響。
+unset PYTHONHOME PYTHONSTARTUP
+export PYTHONPATH=@LIB@
+exec /usr/bin/python3 -s -m @MODULE@ "$@"

@@ -1,0 +1,10 @@
+[Desktop Entry]
+# QUICK_SEEMD 選單捷徑（install.sh 產生）；不登記任何檔案類型，不會改變預設開啟程式
+Type=Application
+Name=QUICK_SEEMD
+Comment=萬用預覽・轉檔・工具箱
+Exec=@APP_EXEC@
+Icon=dev.quickseemd.App
+Terminal=false
+Categories=Utility;
+StartupNotify=true
