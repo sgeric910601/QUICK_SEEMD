@@ -731,3 +731,43 @@ def test_fifo_named_like_archive_is_refused(indir):
     with pytest.raises(errors.QSError) as exc:
         _run([indir / "pipe.zip"])
     assert str(exc.value) == "「pipe.zip」無法轉換成 解壓縮到資料夾。"
+
+
+# ------------------------------------------------------------------ 隱藏檔不直接放到壓縮檔旁
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        {".bash_profile": "echo hi"},
+        {".config/autostart/x.desktop": "[Desktop Entry]"},
+    ],
+)
+def test_single_hidden_entry_is_wrapped(indir, outdir, entries):
+    z = _zip(indir / "photos.zip", entries)
+    [out] = _run([z], outdir)
+    assert out == outdir / "photos"
+    first = next(iter(entries)).split("/")[0]
+    assert (out / first).exists()
+    assert sorted(p.name for p in outdir.iterdir()) == ["photos"]
+
+
+def test_hidden_archive_name_becomes_visible(indir, outdir):
+    z = _zip(indir / ".hidden.zip", {"a.txt": "a", "b.txt": "b"})
+    [out] = _run([z], outdir)
+    assert out == outdir / "_hidden"
+
+
+def test_hidden_single_file_name_becomes_visible(indir, outdir):
+    src = indir / ".xsessionrc.gz"
+    src.write_bytes(gzip.compress(b"exec evil\n"))
+    [out] = _run([src], outdir)
+    assert out == outdir / "_xsessionrc"
+    assert out.read_bytes() == b"exec evil\n"
+
+
+def test_single_hidden_entry_in_tar_is_wrapped(indir, outdir):
+    archive = _tar(indir / "dots.tar.gz", [_member(".xsessionrc")], "w:gz")
+    [out] = _run([archive], outdir)
+    assert out == outdir / "dots"
+    assert (out / ".xsessionrc").is_file()
