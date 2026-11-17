@@ -350,3 +350,42 @@ def test_dynamic_placeholder_field():
         dynamic_placeholder=lambda v, i: f"{i.get('first_base', '檔名')}-已合併",
     )
     assert opt.dynamic_placeholder({}, {"first_base": "報告"}) == "報告-已合併"
+
+
+# ------------------------------------------------------------------ 外部程式的邊界情況
+
+
+def test_process_callback_error_does_not_hang(tmp_path):
+    script = tmp_path / "many.sh"
+    script.write_text("#!/bin/sh\nseq 1 200000\n")
+    script.chmod(0o755)
+
+    def boom(_line):
+        raise ValueError("回呼壞了")
+
+    started = time.monotonic()
+    with pytest.raises(ValueError, match="回呼壞了"):
+        process.run([str(script)], on_line=boom, timeout=30)
+    assert time.monotonic() - started < 20
+    assert not process.SPAWNED
+
+
+def test_process_stdin_to_child_that_does_not_read():
+    started = time.monotonic()
+    res = process.run(["/usr/bin/true"], stdin_bytes=b"x" * (8 * 1024 * 1024), timeout=10)
+    assert res.returncode == 0 and time.monotonic() - started < 10
+
+
+def test_process_timeout_is_reported_even_for_exit_zero_children():
+    with pytest.raises(errors.QSError, match="執行逾時"):
+        process.run(["/usr/bin/sleep", "5"], timeout=0.3)
+    assert not process.SPAWNED
+
+
+def test_process_not_executable_closes_output_file(tmp_path):
+    exe = tmp_path / "not-exec"
+    exe.write_text("x")
+    out = tmp_path / "out.bin"
+    with pytest.raises(errors.QSError, match="轉換失敗"):
+        process.run([str(exe)], stdout_path=out)
+    assert out.exists() and out.stat().st_size == 0

@@ -57,28 +57,38 @@ class WorkerJob:
 
     def start(self) -> None:
         read_fd, write_fd = os.pipe()
+        try:
+            self._proc = self._spawn(write_fd)
+        except BaseException:
+            os.close(read_fd)
+            raise
+        finally:
+            os.close(write_fd)
+        process._register(self._proc.pid)  # noqa: SLF001 — 讓取消與測試防護認得這個子程序
+        try:
+            assert self._proc.stdin is not None
+            self._proc.stdin.write(json.dumps(self.spec.to_dict(), ensure_ascii=False).encode())
+            self._proc.stdin.close()
+        except OSError:
+            # 工作程序一啟動就結束了：讀取執行緒照常收尾，回報「處理程序意外結束」
+            pass
+        self._thread = threading.Thread(target=self._read, args=(read_fd,), daemon=True)
+        self._thread.start()
+
+    def _spawn(self, write_fd: int) -> subprocess.Popen[bytes]:
         env = os.environ.copy()
         env[PROGRESS_FD_ENV] = str(write_fd)
         root = str(package_root())
         env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-        try:
-            self._proc = subprocess.Popen(  # noqa: S603
-                [self.python, "-m", "quickseemd.worker"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=None,
-                env=env,
-                pass_fds=(write_fd,),
-                start_new_session=True,
-            )
-        finally:
-            os.close(write_fd)
-        process._register(self._proc.pid)  # noqa: SLF001 — 讓取消與測試防護認得這個子程序
-        assert self._proc.stdin is not None
-        self._proc.stdin.write(json.dumps(self.spec.to_dict(), ensure_ascii=False).encode())
-        self._proc.stdin.close()
-        self._thread = threading.Thread(target=self._read, args=(read_fd,), daemon=True)
-        self._thread.start()
+        return subprocess.Popen(  # noqa: S603 — 固定的指令，不經過 shell
+            [self.python, "-m", "quickseemd.worker"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=None,
+            env=env,
+            pass_fds=(write_fd,),
+            start_new_session=True,
+        )
 
     def _read(self, fd: int) -> None:
         result: dict[str, Any] | None = None
