@@ -143,57 +143,65 @@ def _sheet_xml(table: Table, shared: _SharedStrings) -> str:
     return "".join(parts)
 
 
-def _package_parts(names: list[str]) -> dict[str, str]:
-    n = len(names)
+_REL = f"{_NS_REL}/"
+_ROOT_RELS = (
+    f'{_XML_DECL}<Relationships xmlns="{_NS_PKG_REL}"><Relationship Id="rId1" '
+    f'Type="{_REL}officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" '
+    'Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/'
+    'core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" '
+    f'Type="{_REL}extended-properties" Target="docProps/app.xml"/></Relationships>'
+)
+_APP = (
+    f'{_XML_DECL}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/'
+    '2006/extended-properties"><Application>QUICK_SEEMD</Application></Properties>'
+)
+
+
+def _content_types(n: int) -> str:
     overrides = "".join(
         f'<Override PartName="/xl/worksheets/sheet{i + 1}.xml" '
         f'ContentType="{_CT}.spreadsheetml.worksheet+xml"/>'
         for i in range(n)
     )
+    return (
+        f'{_XML_DECL}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.'
+        'relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
+        f'<Override PartName="/xl/workbook.xml" ContentType="{_CT}.spreadsheetml.sheet.main+xml"/>'
+        f'{overrides}<Override PartName="/xl/styles.xml" ContentType="{_CT}.spreadsheetml.'
+        'styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="'
+        f'{_CT}.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" '
+        'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+        f'<Override PartName="/docProps/app.xml" ContentType="{_CT}.extended-properties+xml"/>'
+        "</Types>"
+    )
+
+
+def _core_properties() -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (
+        f"{_XML_DECL}<cp:coreProperties xmlns:cp="
+        '"http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" '
+        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>QUICK_SEEMD'
+        '</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">'
+        f"{now}</dcterms:created></cp:coreProperties>"
+    )
+
+
+def _workbook_parts(names: list[str]) -> dict[str, str]:
+    n = len(names)
     sheets = "".join(
         f'<sheet name="{xmldom.escape(name)}" sheetId="{i + 1}" r:id="rId{i + 1}"/>'
         for i, name in enumerate(names)
     )
-    rel = f"{_NS_REL}/"
     rels = "".join(
-        f'<Relationship Id="rId{i + 1}" Type="{rel}worksheet" Target="worksheets/sheet{i + 1}.xml"/>'
+        f'<Relationship Id="rId{i + 1}" Type="{_REL}worksheet" Target="worksheets/sheet{i + 1}.xml"/>'
         for i in range(n)
     )
-    rels += f'<Relationship Id="rId{n + 1}" Type="{rel}styles" Target="styles.xml"/>'
-    rels += f'<Relationship Id="rId{n + 2}" Type="{rel}sharedStrings" Target="sharedStrings.xml"/>'
+    rels += f'<Relationship Id="rId{n + 1}" Type="{_REL}styles" Target="styles.xml"/>'
+    rels += f'<Relationship Id="rId{n + 2}" Type="{_REL}sharedStrings" Target="sharedStrings.xml"/>'
     return {
-        "[Content_Types].xml": (
-            f'{_XML_DECL}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.'
-            'relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
-            f'<Override PartName="/xl/workbook.xml" ContentType="{_CT}.spreadsheetml.sheet.main+xml"/>'
-            f'{overrides}<Override PartName="/xl/styles.xml" ContentType="{_CT}.spreadsheetml.'
-            'styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="'
-            f'{_CT}.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" '
-            'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
-            f'<Override PartName="/docProps/app.xml" ContentType="{_CT}.extended-properties+xml"/>'
-            "</Types>"
-        ),
-        "_rels/.rels": (
-            f'{_XML_DECL}<Relationships xmlns="{_NS_PKG_REL}"><Relationship Id="rId1" '
-            f'Type="{rel}officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" '
-            'Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/'
-            'core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" '
-            f'Type="{rel}extended-properties" Target="docProps/app.xml"/></Relationships>'
-        ),
-        "docProps/core.xml": (
-            f"{_XML_DECL}<cp:coreProperties xmlns:cp="
-            '"http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
-            'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" '
-            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>QUICK_SEEMD'
-            '</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">'
-            f"{now}</dcterms:created></cp:coreProperties>"
-        ),
-        "docProps/app.xml": (
-            f'{_XML_DECL}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/'
-            '2006/extended-properties"><Application>QUICK_SEEMD</Application></Properties>'
-        ),
         "xl/workbook.xml": (
             f'{_XML_DECL}<workbook xmlns="{_NS_MAIN}" xmlns:r="{_NS_REL}"><bookViews>'
             f"<workbookView/></bookViews><sheets>{sheets}</sheets></workbook>"
@@ -201,6 +209,16 @@ def _package_parts(names: list[str]) -> dict[str, str]:
         "xl/_rels/workbook.xml.rels": (
             f'{_XML_DECL}<Relationships xmlns="{_NS_PKG_REL}">{rels}</Relationships>'
         ),
+    }
+
+
+def _package_parts(names: list[str]) -> dict[str, str]:
+    return {
+        "[Content_Types].xml": _content_types(len(names)),
+        "_rels/.rels": _ROOT_RELS,
+        "docProps/core.xml": _core_properties(),
+        "docProps/app.xml": _APP,
+        **_workbook_parts(names),
         "xl/styles.xml": _XML_DECL + _STYLES,
     }
 

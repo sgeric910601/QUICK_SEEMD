@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .. import backends, filetypes, process
@@ -122,7 +122,6 @@ class Profile:
     pandoc_reader: str | None = None
     is_ffmpeg_candidate: bool = False
     is_magick_candidate: bool = False
-    extra: dict = field(default_factory=dict, compare=False)
 
     @property
     def name(self) -> str:
