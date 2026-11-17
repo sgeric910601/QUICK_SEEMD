@@ -6,12 +6,15 @@
 - 色彩描述檔：RGB 類的保留；灰階與 CMYK 轉成 sRGB（不再帶描述檔）。
 - Pillow 沒有 16 位元 RGB；16 位元灰階會縮成 8 位元再轉 RGB。
 - GIF 只有要求時才讀所有畫格（輸出也是 GIF 的時候）。
+- 像素上限（limits.MAX_PIXELS）在解碼前檢查：Pillow 讀檔頭、HEIF 看 ispe、SVG 問 GdkPixbuf 尺寸。
+  其他套件要開使用者的圖片時請用 open_checked。
 """
 
 from __future__ import annotations
 
 import io
 import logging
+import re
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -20,12 +23,11 @@ import numpy as np
 from PIL import Image, ImageCms, ImageSequence, UnidentifiedImageError
 
 from ... import backends, errors, process
-from . import formats
+from . import formats, limits
 
 log = logging.getLogger(__name__)
 
-# 與原版畫布上限（32768 × 32768）相同，超過才當成惡意的「解壓縮炸彈」
-Image.MAX_IMAGE_PIXELS = 32768 * 32768
+HEIF_SCAN_BYTES = 1 << 20  # 在檔案前 1 MB 找 ispe（影像尺寸）區塊
 
 _HEIC_BRANDS = frozenset({b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"})
 _AVIF_BRANDS = frozenset({b"avif", b"avis"})
@@ -47,7 +49,7 @@ _READ_ERRORS = (
     OSError,
     SyntaxError,
     ValueError,
-    Image.DecompressionBombError,
+    *limits.BOMB_ERRORS,
 )
 
 
@@ -125,16 +127,37 @@ def load(path: str | Path, all_frames: bool = False) -> Source:
     if brand is not None:
         return _load_heif(p, brand, size)
     try:
-        with Image.open(p) as im:
+        with open_checked(p) as im:
             return _from_pillow(p, im, all_frames, size)
-    except Image.DecompressionBombError as exc:
-        raise errors.unreadable(f"「{p.name}」太大，無法處理。") from exc
     except _READ_ERRORS as exc:
         log.debug("Pillow 讀不到 %s：%s", p, exc)
     src = _load_pixbuf(p, size)
     if src is None:
         raise errors.unreadable(f"「{p.name}」不是可辨識的圖片。")
     return src
+
+
+def open_checked(path: str | Path) -> Image.Image:
+    """用 Pillow 開圖（只讀檔頭）並檢查像素上限；太大時丟出中文錯誤。
+
+    給所有要開使用者圖片的地方用（回傳的圖由呼叫端關閉，可以用 with）。
+    """
+    try:
+        im = Image.open(path)
+    except limits.BOMB_ERRORS as exc:
+        raise limits.too_large(_bomb_pixels(exc)) from exc
+    try:
+        limits.check_pixels(*im.size)
+    except errors.QSError:
+        im.close()
+        raise
+    return im
+
+
+def _bomb_pixels(exc: BaseException) -> int:
+    """從 Pillow 的訊息「Image size (N pixels) exceeds limit…」取出像素數。"""
+    match = re.search(r"\((\d+) pixels\)", str(exc))
+    return int(match.group(1)) if match else limits.MAX_PIXELS + 1
 
 
 def pixel_size(path: str | Path) -> tuple[int, int] | None:
@@ -227,7 +250,9 @@ def _from_pillow(p: Path, im: Image.Image, all_frames: bool, size: int) -> Sourc
 
 
 def _raw_frames(im: Image.Image, every: bool) -> list[tuple[Image.Image, float]]:
-    if every and getattr(im, "n_frames", 1) > 1:
+    count = getattr(im, "n_frames", 1)
+    if every and count > 1:
+        limits.check_pixels(im.width, im.height, count)  # 所有畫格合計
         out = []
         for frame in ImageSequence.Iterator(im):
             frame.load()
@@ -304,6 +329,9 @@ def _load_heif(p: Path, kind: str, size: int) -> Source:
         if src is None:
             raise errors.tool_missing(backends.BACKENDS["heif-convert"].title)
         return replace(src, format=kind)
+    dims = heif_dimensions(p)
+    if dims is not None:
+        limits.check_pixels(*dims)  # 解碼前就擋下太大的圖
     with tempfile.TemporaryDirectory(prefix="qs-heif-") as tmp:
         out = Path(tmp) / "decoded.png"
         process.run_checked([exe, "--quiet", str(p.resolve()), str(out)], "libheif")
@@ -312,9 +340,27 @@ def _load_heif(p: Path, kind: str, size: int) -> Source:
             if not pngs:
                 raise errors.unreadable(f"無法解碼「{p.name}」。")
             out = pngs[0]
-        with Image.open(out) as im:
+        with open_checked(out) as im:
             src = _from_pillow(p, im, False, size)
     return replace(src, format=kind)
+
+
+def heif_dimensions(path: Path) -> tuple[int, int] | None:
+    """HEIF／AVIF 裡最大的影像尺寸（ispe 區塊：版本 4 位元組，接著寬、高各 4 位元組）。"""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(HEIF_SCAN_BYTES)
+    except OSError:
+        return None
+    best: tuple[int, int] | None = None
+    at = data.find(b"ispe")
+    while at != -1 and at + 16 <= len(data):
+        w = int.from_bytes(data[at + 8 : at + 12], "big")
+        h = int.from_bytes(data[at + 12 : at + 16], "big")
+        if best is None or w * h > best[0] * best[1]:
+            best = (w, h)
+        at = data.find(b"ispe", at + 4)
+    return best
 
 
 # ---------------------------------------------------------------- GdkPixbuf（SVG 等）
@@ -335,6 +381,10 @@ def _load_pixbuf(p: Path, size: int) -> Source | None:
     gdk, glib = _gdk_pixbuf()
     if gdk is None:
         return None
+    info = gdk.Pixbuf.get_file_info(str(p))
+    if not info or info[0] is None:
+        return None
+    limits.check_pixels(int(info[1]), int(info[2]))  # SVG 等先問尺寸，太大就不點陣化
     try:
         pb = gdk.Pixbuf.new_from_file(str(p))
     except glib.Error as exc:

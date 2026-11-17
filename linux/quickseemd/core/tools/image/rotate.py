@@ -55,9 +55,9 @@ def apply_op(image: Image.Image, op: str) -> Image.Image:
 
 
 def _jpegtran_ok(f: Path) -> bool:
-    """純 JPG（不是 MPO）且方向為正時才能直接無損搬移。"""
+    """純 JPG（不是 MPO）且方向為正時才能直接無損搬移；太大的圖在交給 jpegtran 前就拒絕。"""
     try:
-        with Image.open(f) as im:
+        with loader.open_checked(f) as im:
             if im.format != "JPEG":
                 return False
             return loader.exif_orientation(im) == 1
