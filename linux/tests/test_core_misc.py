@@ -338,3 +338,15 @@ def test_converter_describe_text_and_folder(tmp_path):
     (tmp_path / "d").mkdir()
     (tmp_path / "d" / "x").write_text("1")
     assert converter.describe(tmp_path / "d")[1] == "1 個項目"
+
+
+def test_dynamic_placeholder_field():
+    from quickseemd.core.options import Kind, Option
+
+    opt = Option(
+        "name",
+        Kind.TEXT,
+        placeholder="檔名-已合併",
+        dynamic_placeholder=lambda v, i: f"{i.get('first_base', '檔名')}-已合併",
+    )
+    assert opt.dynamic_placeholder({}, {"first_base": "報告"}) == "報告-已合併"

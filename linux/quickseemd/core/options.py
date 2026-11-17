@@ -60,6 +60,8 @@ class Option:
     choices: tuple[Choice, ...] = ()
     caption: str | None = None  # 控制項下方的固定說明（開關的副標）
     placeholder: str | None = None
+    # 動態的預留文字（例如合併 PDF 的「<第一個檔名>-已合併」）；有值時優先於 placeholder
+    dynamic_placeholder: Callable[[Values, Info], str] | None = None
     minimum: float | None = None
     maximum: float | None = None
     step: float = 1
