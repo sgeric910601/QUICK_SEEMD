@@ -281,6 +281,19 @@ def test_add_to_shelf_shows_shelf(session: Session, tmp_path: Path) -> None:
 # ------------------------------------------------------------------ 拖曳輪盤
 
 
+def test_drag_from_own_shelf_is_ignored(session: Session) -> None:
+    f = session.files / "架上.txt"
+    f.write_text("x")
+    session.call("AddToShelf", "(as)", ([str(f)],))
+    time.sleep(1.0)
+    before = session.log_text().count("輪盤出現")
+    # 浮動暫存第一列（視窗在 1010,400；標題列約 40 像素高）
+    session.driver("drag", "1090", "465", "640", "420", "Alt_L", "0.1", "640", "282")
+    assert wait_for(lambda: "忽略自己發起的拖曳" in session.log_text(), timeout=5)
+    assert session.log_text().count("輪盤出現") == before
+    assert not (session.files / "架上.zip").exists()
+
+
 def test_tap_alt_opens_tools_wheel_and_drop_runs_action(session: Session, tmp_path: Path) -> None:
     f = session.files / "拖曳.txt"
     f.write_text("拖曳", "utf-8")
