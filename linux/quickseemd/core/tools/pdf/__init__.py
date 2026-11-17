@@ -8,6 +8,7 @@ from __future__ import annotations
 from ...model import ToolDefinition
 from .compress import COMPRESS
 from .fromimages import FROM_IMAGES
+from .html import FROM_HTML
 from .ocr import OCR
 from .organize import ORGANIZE, ROTATE
 from .pages import DELETE_PAGES, MERGE, SPLIT
@@ -31,5 +32,6 @@ TOOLS: list[ToolDefinition] = [
     UNLOCK,
     OCR,
     TO_TEXT,
+    FROM_HTML,
     METADATA,
 ]
