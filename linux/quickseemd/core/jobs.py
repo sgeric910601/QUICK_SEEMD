@@ -83,12 +83,14 @@ class WorkerJob:
         root = str(package_root())
         env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         return subprocess.Popen(  # noqa: S603 — 固定的指令，不經過 shell
-            # -s：不載入使用者自己 pip 裝的套件，和啟動檔一致
-            [self.python, "-s", "-m", "quickseemd.worker"],
+            # -s：不載入使用者自己 pip 裝的套件；-P：不把目前資料夾放進模組搜尋路徑
+            # （避免檔案堆裡夾帶的 json.py 之類被當成模組載入）；工作資料夾固定為 /
+            [self.python, "-s", "-P", "-m", "quickseemd.worker"],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=None,
             env=env,
+            cwd="/",
             pass_fds=(write_fd,),
             start_new_session=True,
         )

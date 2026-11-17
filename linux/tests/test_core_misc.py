@@ -403,3 +403,68 @@ def test_skipped_files_appear_in_summary(extra_tools, tmp_path):
     assert text == "已略過 1 個檔案：在「b」裡找不到臉孔，未產生檔案。"
     text = _summary_with_skips("共處理 2 張臉", res, [])
     assert text.startswith("共處理 2 張臉；已略過 1 個檔案：")
+
+
+# ------------------------------------------------------------------ 安全檢查修正
+
+
+def test_output_directory_does_not_follow_symlinks(tmp_path):
+    from quickseemd.core.model import ToolContext as Ctx
+
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "a.txt").write_text("x")
+    link_dir = tmp_path / "links"
+    link_dir.mkdir()
+    (link_dir / "a.txt").symlink_to(real / "a.txt")
+    assert Ctx(None).output_directory(link_dir / "a.txt") == link_dir
+
+
+def test_action_refuses_wrong_file_type(tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_text("純文字")
+    res = run_spec(JobSpec("action", "pdf.compress-recommended", [str(f)]))
+    assert res.error == "「壓縮 PDF（建議）」不適用於這些檔案。"
+    res = run_spec(JobSpec("action", "office.to-pdf", [str(f)]))
+    assert "不認得動作" in res.error
+
+
+def test_worker_caps_its_memory(monkeypatch):
+    import resource
+
+    from quickseemd import worker
+
+    monkeypatch.setenv(worker.MEM_LIMIT_ENV, "1")
+    soft_before, hard_before = resource.getrlimit(resource.RLIMIT_DATA)
+    try:
+        limit = worker.cap_memory()
+        assert limit <= 1024**3
+        assert resource.getrlimit(resource.RLIMIT_DATA)[0] == limit
+    finally:
+        resource.setrlimit(resource.RLIMIT_DATA, (soft_before, hard_before))
+
+
+def test_move_keeps_source_when_it_changes_during_copy(tmp_path, monkeypatch):
+    import errno as _errno
+
+    from quickseemd.core import naming
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.txt").write_text("1")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    real_copy = naming._copy_tree_exclusive
+
+    def copy_then_add(s, d):
+        real_copy(s, d)
+        (s / "late.txt").write_text("複製期間新增")
+
+    def exdev(s, d):
+        raise OSError(_errno.EXDEV, "跨磁碟")
+
+    monkeypatch.setattr(naming, "_rename_noreplace_or_link", exdev)
+    monkeypatch.setattr(naming, "_copy_tree_exclusive", copy_then_add)
+    with pytest.raises(errors.QSError):
+        naming.move_no_overwrite(src, dest)
+    assert (src / "late.txt").exists() and (src / "a.txt").exists()

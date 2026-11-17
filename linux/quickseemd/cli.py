@@ -36,7 +36,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     def report(fraction: float, message: str | None) -> None:
         pct = int(fraction * 100)
-        sys.stderr.write(f"\r{pct:3d}% {message or ''}\x1b[K")
+        # 檔名可能含控制字元（終端機跳脫序列），印出前一律換成 �
+        safe = "".join("�" if (ord(c) < 32 or 0x7F <= ord(c) < 0xA0) else c for c in message or "")
+        sys.stderr.write(f"\r{pct:3d}% {safe}\x1b[K")
         sys.stderr.flush()
 
     result = run_spec(spec, report, threading.Event())
