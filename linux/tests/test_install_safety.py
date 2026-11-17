@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from install_support import INSTALL, Home, make_home, run
+from install_support import INSTALL, UNINSTALL, Home, make_home, run
 
 FOREIGN = "這是使用者自己的檔案\n"
 
@@ -163,3 +163,32 @@ def test_help(home: Home):
     for flag in ("--deps", "--models", "--no-autostart"):
         assert flag in res.stdout
     assert not home.manifest.exists()
+
+
+def test_autostart_turned_off_in_app_is_respected(home: Home):
+    """在系統匣關掉「登入時自動啟動」（檔案被刪）後，重新安裝不會又把它打開。"""
+    autostart = home.config / "autostart" / "dev.quickseemd.Agent.desktop"
+    assert run(home, INSTALL).returncode == 0
+    autostart.unlink()
+    for _ in range(2):  # 之後每次重新安裝都要記得
+        res = run(home, INSTALL)
+        assert res.returncode == 0, res.stdout + res.stderr
+        assert not autostart.exists()
+        assert "自動啟動" in res.stdout
+    # 解除安裝不會因為這筆紀錄出錯
+    assert run(home, UNINSTALL, stdin="n\n").returncode == 0
+
+
+def test_autostart_created_by_the_app_is_adopted(home: Home):
+    """之後在系統匣打開自動啟動（檔案由背景程式建立），重新安裝要沿用而不是停止。"""
+    autostart = home.config / "autostart" / "dev.quickseemd.Agent.desktop"
+    assert run(home, INSTALL, "--no-autostart").returncode == 0
+    autostart.parent.mkdir(parents=True, exist_ok=True)
+    autostart.write_text(
+        "[Desktop Entry]\nType=Application\nName=QUICK_SEEMD\n"
+        f"Exec={home.bin / 'quickseemd-agent'}\nX-GNOME-Autostart-enabled=true\n",
+        "utf-8",
+    )
+    res = run(home, INSTALL)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert str(autostart) in home.manifest_entries()

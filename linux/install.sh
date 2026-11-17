@@ -61,6 +61,7 @@ QS_STAGE=""
 PLAN_SRC=()
 PLAN_DEST=()
 PLAN_MODE=()
+QS_REMEMBER=() # 不安裝、但要留在紀錄裡的路徑（使用者關掉的自動啟動）
 
 usage() {
   cat <<'EOF'
@@ -159,7 +160,7 @@ with Image.open(source) as img:
 PY
 }
 
-plan_generated() {
+plan_rendered() {
   local name lib_q stage=$QS_STAGE
   mkdir -p -- "$stage/bin" "$stage/entries"
   printf -v lib_q '%q' "$QS_LIB"
@@ -200,8 +201,42 @@ plan_all() {
   plan_add "$QS_REPO_DIR/VERSION" "$QS_LIB/quickseemd/VERSION" 644
   plan_tree "$QS_DATA_SRC" "$QS_SHARE" templates
   plan_add "$QS_PKG_SRC/nemo/quickseemd_nemo.py" "$QS_NEMO_EXT/quickseemd_nemo.py" 644
-  plan_generated
+  plan_rendered
   plan_icons
+}
+
+# ---------------------------------------------------------------- 登入自動啟動
+
+# 背景程式自己也會建立／刪除同一個自動啟動檔（系統匣的「登入時自動啟動」）
+qs_autostart_path() {
+  printf '%s' "$QS_AUTOSTART/dev.quickseemd.Agent.desktop"
+}
+
+# 上次裝過、後來被刪掉＝使用者在系統匣關掉了：這次不再打開，並把路徑留在紀錄裡記住這個選擇
+decide_autostart() {
+  local path
+  path=$(qs_autostart_path)
+  if [ "$WANT_AUTOSTART" = 1 ] && [ -n "${QS_OLD[$path]+x}" ] && [ ! -e "$path" ]; then
+    WANT_AUTOSTART=0
+    QS_REMEMBER+=("$path")
+    qs_say "▸ 你之前關掉了登入時自動啟動，維持關閉（要打開請在系統匣勾選）"
+  fi
+}
+
+# 背景程式自己建立的自動啟動檔（名稱是 QUICK_SEEMD、執行背景程式）：當成自己的檔案沿用
+adopt_app_autostart() {
+  local path
+  path=$(qs_autostart_path)
+  if [ "$WANT_AUTOSTART" != 1 ] || [ -n "${QS_OLD[$path]+x}" ] || [ ! -f "$path" ] ||
+    [ -L "$path" ]; then
+    return 0
+  fi
+  if grep -qx 'Name=QUICK_SEEMD' -- "$path" &&
+    grep -Eq '^Exec=.*quickseemd(-agent|\.agent)' -- "$path"; then
+    QS_OLD["$path"]=1
+    qs_say "▸ 沿用 QUICK_SEEMD 背景程式建立的自動啟動檔"
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------- 衝突檢查與安裝
@@ -237,7 +272,7 @@ remove_stale() {
   local -A planned=()
   local -a dirs=()
   local dest
-  for dest in "${PLAN_DEST[@]}"; do
+  for dest in "${PLAN_DEST[@]}" "${QS_REMEMBER[@]}"; do
     planned["$dest"]=1
   done
   for dest in "${!QS_OLD[@]}"; do
@@ -257,7 +292,7 @@ install_all() {
   qs_write_manifest "${!QS_OLD[@]}" "${PLAN_DEST[@]}"
   install_files
   remove_stale
-  qs_write_manifest "${PLAN_DEST[@]}"
+  qs_write_manifest "${PLAN_DEST[@]}" "${QS_REMEMBER[@]}"
   qs_refresh_icon_cache
   qs_say "✓ 已安裝 ${#PLAN_DEST[@]} 個檔案（清單：$QS_MANIFEST）"
 }
@@ -430,8 +465,10 @@ main() {
   preflight
   trap cleanup EXIT
   QS_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/quickseemd-install.XXXXXX")
-  plan_all
   qs_read_manifest
+  decide_autostart
+  plan_all
+  adopt_app_autostart
   check_conflicts
   install_all
   if [ "$want_models" = 1 ]; then
