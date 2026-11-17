@@ -131,5 +131,6 @@ def run_spec(
     finally:
         ctx.cleanup()
     result.summary = ctx.last_message
+    result.clipboard = ctx.clipboard
     result.seconds = time.monotonic() - started
     return result

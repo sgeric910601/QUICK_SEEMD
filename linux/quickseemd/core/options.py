@@ -32,7 +32,9 @@ class Kind(str, Enum):
     PASSWORD = "password"  # 密碼輸入
     NUMBER = "number"  # 整數輸入＋加減按鈕
     PAGE_RANGE = "page_range"  # 頁碼範圍（info["page_count"] 用來顯示說明與檢查）
-    COLOR = "color"  # 色點單選；choice.value 是 "#rrggbb" 或 "custom"（自訂色存在 custom_key）
+    # 色點單選；choice.value 是 "#rrggbb"、"transparent"（透明，畫棋盤格）或 "custom"
+    # （自訂色以 "#rrggbb" 存在 custom_key，預設值是 custom_default）
+    COLOR = "color"
     GRID = "grid"  # 位置選擇格（columns 欄，choices 依列優先排列；值為 None 的格子不能選）
     FILE = "file"  # 選一個檔案（例如浮水印標誌），值是路徑字串
     TIME = "time"  # 時間輸入（「1:05.5」或「65」），值是字串
@@ -64,6 +66,7 @@ class Option:
     display: Callable[[Any], str] | None = None  # 滑桿數值的顯示方式
     columns: int = 3  # GRID 用
     custom_key: str | None = None  # COLOR 選「自訂」時，自訂色存在這個鍵
+    custom_default: Any = None  # 自訂色的預設值（例如 "#e3332e"）
     file_mime: str | None = None  # FILE 可選的檔案類型（例如 "image/*"）
     group: str | None = None  # 段落標題（同一 group 連續的選項畫在同一段）
     group_icon: str | None = None
@@ -73,6 +76,10 @@ class Option:
     note: Callable[[Values, Info], tuple[str, bool] | None] | None = None
     # 動態選項（例如依外部工具是否存在而增減的格式）；回傳完整 choices
     dynamic_choices: Callable[[Values, Info], tuple[Choice, ...]] | None = None
+    # 動態範圍（滑桿／數字）：回傳 (最小, 最大)，例如依影片長度決定 GIF 起點上限
+    dynamic_range: Callable[[Values, Info], tuple[float, float]] | None = None
+    # 文字／數字欄位旁的快速填入按鈕（例如 10／25／50 MB），按下就把 value 填入
+    suggestions: tuple[Choice, ...] = ()
 
     def is_visible(self, values: Values, info: Info) -> bool:
         return self.visible is None or bool(self.visible(values, info))
@@ -85,6 +92,13 @@ class Option:
             return self.dynamic_choices(values, info)
         return self.choices
 
+    def current_range(self, values: Values, info: Info) -> tuple[float | None, float | None]:
+        """目前的（最小, 最大）；有 dynamic_range 時以它為準。"""
+        if self.dynamic_range is not None:
+            lo, hi = self.dynamic_range(values, info)
+            return float(lo), float(max(lo, hi))
+        return self.minimum, self.maximum
+
 
 def defaults(options: tuple[Option, ...]) -> Values:
     """所有選項的預設值（NOTE 不算）。"""
@@ -94,7 +108,7 @@ def defaults(options: tuple[Option, ...]) -> Values:
             continue
         out[opt.key] = opt.default
         if opt.custom_key:
-            out.setdefault(opt.custom_key, None)
+            out.setdefault(opt.custom_key, opt.custom_default)
     return out
 
 
