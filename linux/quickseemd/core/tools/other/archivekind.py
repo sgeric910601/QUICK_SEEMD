@@ -181,15 +181,59 @@ def _inside(root: str, path: str) -> bool:
     return path == root or path.startswith(root + os.sep)
 
 
+def _target_resolves_inside(root: Path, parts: tuple[str, ...], target: str) -> bool:
+    """連結（位在 root 裡的 parts）的目標逐步解析都留在 root 裡，而且中途不經過其他符號連結。
+
+    中途經過連結再「..」的話，交付（搬移或改名）之後解析結果會改變，所以一律不允許。
+    最後一段可以是另一個連結（例如 libx.so → libx.so.1），那個連結本身也會被同樣檢查。
+    """
+    if not target or "\0" in target or target.startswith("/") or _DRIVE.match(target):
+        return False
+    depth = list(parts[:-1])
+    comps = [c for c in target.split("/") if c not in ("", ".")]
+    for i, comp in enumerate(comps):
+        if comp == "..":
+            if not depth:
+                return False
+            depth.pop()
+            continue
+        depth.append(comp)
+        if i < len(comps) - 1 and os.path.islink(root.joinpath(*depth)):
+            return False
+    return True
+
+
+def _check_link(root: Path, real_root: str, full: str, rel: str) -> None:
+    if not _target_resolves_inside(root, Path(rel).parts, os.readlink(full)):
+        raise UnsafeEntry(rel)
+    try:
+        real = os.path.realpath(full, strict=True)
+    except OSError as exc:  # 懸空的連結或連結循環
+        raise UnsafeEntry(rel) from exc
+    if not _inside(real_root, real):
+        raise UnsafeEntry(rel)
+
+
 def verify_tree(root: Path) -> None:
-    """解壓縮後的最後檢查：符號連結實際指向的位置在 root 裡、沒有特殊檔案。"""
+    """交付前的最後檢查，以「實際交付出去的項目」為根（單一項目時就是那個項目本身）。
+
+    - 交付的項目本身不能是符號連結，也不能是特殊檔案。
+    - 裡面每個符號連結：目標不是絕對路徑、逐步解析不離開 root、中途不經過其他連結、
+      實際存在（不懸空、不循環），而且實際指向的位置在 root 裡。
+    - 不能有管線、裝置檔、socket。
+    """
+    top = os.lstat(root).st_mode
+    if stat.S_ISLNK(top) or not (stat.S_ISREG(top) or stat.S_ISDIR(top)):
+        raise UnsafeEntry(Path(root).name)
+    if stat.S_ISREG(top):
+        return
     real_root = os.path.realpath(root)
     for dirpath, dirnames, filenames in os.walk(root):
         for name in (*dirnames, *filenames):
             full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, root)
             mode = os.lstat(full).st_mode
             if stat.S_ISLNK(mode):
-                if not _inside(real_root, os.path.realpath(full)):
-                    raise UnsafeEntry(os.path.relpath(full, root))
+                _check_link(Path(root), real_root, full, rel)
             elif not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
-                raise UnsafeEntry(os.path.relpath(full, root))
+                raise UnsafeEntry(rel)

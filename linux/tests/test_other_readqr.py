@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import os
+
 import cv2
 import numpy as np
 import pytest
@@ -301,3 +303,65 @@ def test_pdf_with_only_absurd_pages_finds_nothing(tmp_path):
     with pytest.raises(errors.QSError) as exc:
         _run([pdf])
     assert str(exc.value) == NOT_FOUND
+
+
+# ------------------------------------------------------------------ 外部程式逾時
+
+
+def _hanging_tool(tmp_path: Path, name: str) -> Path:
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    script = bindir / name
+    script.write_text("#!/bin/sh\nexec /bin/sleep 30\n")
+    script.chmod(0o755)
+    return bindir
+
+
+@pytest.fixture
+def fake_tools(monkeypatch):
+    from quickseemd.core import backends
+
+    def install(bindir: Path) -> None:
+        monkeypatch.setenv("QUICKSEEMD_TOOL_PATH", f"{bindir}:{os.environ['QUICKSEEMD_TOOL_PATH']}")
+        backends.refresh()
+
+    yield install
+    monkeypatch.undo()
+    backends.refresh()
+
+
+def test_pdfinfo_timeout(tmp_path, monkeypatch, fake_tools):
+    import time
+
+    from quickseemd.core.tools.other import readqr
+
+    pdf = _qr_pdf(tmp_path / "doc.pdf", [(600, 800, True)], tmp_path)
+    fake_tools(_hanging_tool(tmp_path, "pdfinfo"))
+    monkeypatch.setattr(readqr, "PDFINFO_TIMEOUT", 1.0)
+    started = time.monotonic()
+    with pytest.raises(errors.QSError) as exc:
+        _run([pdf])
+    assert time.monotonic() - started < 10
+    assert str(exc.value) == "無法讀取檔案內容：doc.pdf"
+
+
+def test_page_render_timeout_skips_page(tmp_path, monkeypatch, fake_tools):
+    import time
+
+    from quickseemd.core.tools.other import readqr
+
+    pdf = _qr_pdf(tmp_path / "doc.pdf", [(600, 800, True)], tmp_path)
+    fake_tools(_hanging_tool(tmp_path, "pdftocairo"))
+    monkeypatch.setattr(readqr, "RENDER_TIMEOUT", 1.0)
+    started = time.monotonic()
+    with pytest.raises(errors.QSError) as exc:
+        _run([pdf])
+    assert time.monotonic() - started < 10
+    assert str(exc.value) == NOT_FOUND
+
+
+def test_timeouts_are_set():
+    from quickseemd.core.tools.other import readqr
+
+    assert readqr.PDFINFO_TIMEOUT == 30
+    assert readqr.RENDER_TIMEOUT == 60
