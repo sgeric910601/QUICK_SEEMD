@@ -59,3 +59,15 @@ def test_signals_only_reach_own_children():
     proc = subprocess.Popen(["/usr/bin/sleep", "30"])
     proc.terminate()
     assert proc.wait(timeout=5) != 0
+
+
+def test_memory_is_capped_for_tests_and_children():
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_DATA)
+    assert soft == conftest.MEM_LIMIT_BYTES and hard == conftest.MEM_LIMIT_BYTES
+    assert soft <= 6 * 1024**3
+    # 子程序繼承上限：要求超過上限的記憶體會失敗，而不是吃光整台電腦
+    code = "b = bytearray(%d)" % (conftest.MEM_LIMIT_BYTES + 512 * 1024**2)
+    res = subprocess.run(["/usr/bin/python3", "-c", code], capture_output=True, check=False)
+    assert res.returncode != 0 and b"MemoryError" in res.stderr
