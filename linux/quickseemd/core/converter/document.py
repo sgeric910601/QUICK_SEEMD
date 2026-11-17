@@ -85,13 +85,13 @@ def _from_html(
     if fid == "pdf":
         html_to_pdf(_write_html(work, out.stem, markup), out, base_dir, ctx)
         return
-    source = _write_html(work, out.stem, htmlsafe.block_remote(markup, base_dir))
+    source = _write_html(work, out.stem, htmlsafe.sanitize(markup, base_dir))
     _via_office(source, fid, out, work, ctx, office.HTML_IMPORT)
 
 
 def _user_html_to_office(path: Path, fid: str, out: Path, work: Path, ctx) -> None:  # noqa: ANN001
     """使用者的 HTML 檔：先清掉外部參照（本機圖片改成內嵌），再交給 LibreOffice。"""
-    clean = htmlsafe.block_remote_bytes(path.read_bytes(), path.parent)
+    clean = htmlsafe.sanitize_bytes(path.read_bytes(), path.parent)
     source = _scratch(work) / naming.join_name(naming.sanitize(out.stem), "html")
     source.write_bytes(clean)
     _via_office(source, fid, out, work, ctx, office.HTML_IMPORT)

@@ -103,39 +103,45 @@ def test_html_sanitizer_blocks_external_references(tmp_path: Path) -> None:
     (tmp_path / "secret.png").write_bytes(b"\x89PNG secret")
     markup = (
         '<html><head><base href="http://evil/"><meta http-equiv="refresh" content="0;url=http://x">'
-        '<link rel="stylesheet" href="http://evil/a.css">'
+        '<link rel="stylesheet" href="http://evil/a.css"><script src="http://evil/s.js">x</script>'
         "<style>@import url(http://evil/b.css); p { background: url('http://evil/c.png') }</style>"
-        "</head><body>"
+        "</head><body><!-- <img src='http://evil/comment'> -->"
         '<img src="ok.png"><img src="../secret.png"><img src="&#104;ttp://evil/d.png">'
-        '<img src=" http://evil/e.png" srcset="ok.png 1x, http://evil/f.png 2x">'
+        '<img src=" http://evil/e.png" srcset="ok.png 1x, http://evil/f.png 2x" onerror="x()">'
         '<video poster="//evil/g.png"></video><table background="/etc/h.png"></table>'
-        '<p style="background:url(http://evil/i.png)">src="http://evil/text" 保留</p>'
-        '<object data="file:///etc/passwd"></object><embed src="http://evil/j"><iframe src="http://evil/k"></iframe>'
+        '<p style="background:url(http://evil/i.png)">see http://evil/text here</p>'
+        '<object data="file:///etc/passwd"></object><embed src="http://evil/j">'
+        '<iframe src="http://evil/k"></iframe>'
+        '<svg><image href="http://evil/l.png"/></svg><img alt="a>b" src="http://evil/m.png">'
         '<a href="http://example.com/">連結保留</a></body></html>'
     )
-    clean = htmlsafe.block_remote(markup, base)
-    assert ' href="http://evil/a.css"' not in clean and "data-blocked-href=" in clean
-    for needle in ("evil/b.css", "evil/c.png", "evil/i.png"):  # @import 與 url() 整段拿掉
-        assert needle not in clean
-    assert "<base" not in clean and "refresh" not in clean
-    assert 'src="data:image/png;base64,' in clean
-    assert (
-        "secret" not in clean.split("data-blocked-src")[0]
-        or 'data-blocked-src="../secret.png"' in clean
-    )
-    assert 'data-blocked-src="../secret.png"' in clean
-    assert 'data-blocked-src="&#104;ttp://evil/d.png"' in clean
-    assert 'data-blocked-src=" http://evil/e.png"' in clean
-    assert "data-blocked-srcset=" in clean
-    assert "data-blocked-poster=" in clean and "data-blocked-background=" in clean
-    assert "data-blocked-data=" in clean
-    assert (
-        'data-blocked-src="http://evil/j"' in clean and 'data-blocked-src="http://evil/k"' in clean
-    )
-    assert 'src="http://evil/text" 保留' in clean  # 內文不動
+    clean = htmlsafe.sanitize(markup, base)
+    assert "evil/" not in clean.replace("see http://evil/text here", "")
+    assert "see http://evil/text here" in clean  # 內文不動
+    assert "<base" not in clean and "<link" not in clean and "<script" not in clean
+    assert "refresh" not in clean and "onerror" not in clean and "srcset" not in clean
+    assert clean.count('src="data:image/png;base64,') == 1
+    assert "secret" not in clean
     assert '<a href="http://example.com/">' in clean
-    raw = htmlsafe.block_remote_bytes('<img src="http://x/y.png">中'.encode("cp950"), base)
-    assert raw.endswith("中".encode("cp950")) and b"data-blocked-src" in raw
+    assert '<img alt="a&gt;b">' in clean  # 引號裡的 > 不會把標籤切開
+    with pytest.raises(errors.QSError):
+        htmlsafe.sanitize("<p>a\x00b</p>", base)
+
+
+def test_html_decoding_rules(tmp_path: Path) -> None:
+    from quickseemd.core.converter import htmlsafe
+
+    utf16 = "\N{ZERO WIDTH NO-BREAK SPACE}<img src='http://x/y'>中文".encode("utf-16-le")
+    assert htmlsafe.decode_html(utf16).endswith("中文")
+    utf7 = b'<meta charset="utf-7">+ADw-img src+AD0AIg-http://x/y+ACI-+AD4-'
+    assert "<img src=" in htmlsafe.decode_html(utf7)
+    out = htmlsafe.sanitize_bytes(utf7, tmp_path).decode("utf-8")
+    assert "http://x" not in out and out.startswith('<meta charset="utf-8">')
+    big5 = '<meta charset="big5"><p>繁體</p>'.encode("cp950")
+    assert htmlsafe.decode_html(big5).endswith("繁體</p>")
+    with pytest.raises(errors.QSError) as exc:
+        htmlsafe.decode_html(b"<p>a\x00b</p>")
+    assert "NUL" in str(exc.value)
 
 
 def test_pdf_to_html_text_only(pdf_file: Path, outdir: Path) -> None:
@@ -446,6 +452,26 @@ def _spreadsheet_with_links(path: Path, port: int) -> Path:
     return path
 
 
+def _bypass_pages(folder: Path, port: int) -> list[Path]:
+    """各種想騙過清理器的 HTML（全部都不該讓 LibreOffice 發出請求）。"""
+    url = f"http://127.0.0.1:{port}"
+    bom = "\N{ZERO WIDTH NO-BREAK SPACE}"
+    pages = {
+        "quoted.html": f'<p title=\'x>\'><img alt="a>b" src="{url}/quoted"></p>'.encode(),
+        "utf16.html": f"{bom}<html><body><img src='{url}/utf16'></body></html>".encode("utf-16-le"),
+        "charset.html": (
+            b'<meta charset="utf-7">+ADw-img src+AD0AIg-' + url.encode() + b"/utf7+ACI-+AD4-"
+        ),
+        "style.html": f"<style>@import url({url}/import);</style><p>x</p>".encode(),
+        "remote.html": f'<html><body><p>x</p><img src="{url}/img.png"></body></html>'.encode(),
+    }
+    paths = []
+    for name, data in pages.items():
+        (folder / name).write_bytes(data)
+        paths.append(folder / name)
+    return paths
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("sandbox", [True, False])
 def test_libreoffice_makes_no_requests(
@@ -454,18 +480,19 @@ def test_libreoffice_makes_no_requests(
     from quickseemd.core import soffice
 
     if not sandbox:
-        monkeypatch.setattr(soffice, "sandbox_prefix", lambda _w: [])  # 只靠設定檔也要擋住
+        monkeypatch.setattr(soffice, "sandbox_prefix", lambda _w: [])  # 只靠設定檔與清理器也要擋住
     server, hits = _recording_server()
     try:
         port = server.server_address[1]
         sheet = _spreadsheet_with_links(tmp_path / "links.fods", port)
         soffice.convert(sheet, "pdf", tmp_path)
-        page = tmp_path / "page.html"
-        page.write_text(
-            f'<html><body><p>x</p><img src="http://127.0.0.1:{port}/img.png"></body></html>'
-        )
-        [docx] = run(page, "docx", outdir)
-        assert docx.exists()
+        for page in _bypass_pages(tmp_path, port):
+            [docx] = run(page, "docx", outdir)
+            assert docx.exists()
+        nul = tmp_path / "nul.html"
+        nul.write_bytes(f'<p>a\x00b</p><img src="http://127.0.0.1:{port}/nul">'.encode())
+        with pytest.raises(errors.QSError):
+            run(nul, "docx", outdir)
     finally:
         server.shutdown()
     assert hits == []
