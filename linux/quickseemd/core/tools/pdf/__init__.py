@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from ...model import ToolDefinition
+from .organize import ORGANIZE, ROTATE
 from .pages import DELETE_PAGES, MERGE, SPLIT
 
-TOOLS: list[ToolDefinition] = [MERGE, SPLIT, DELETE_PAGES]
+TOOLS: list[ToolDefinition] = [MERGE, SPLIT, ORGANIZE, DELETE_PAGES, ROTATE]
