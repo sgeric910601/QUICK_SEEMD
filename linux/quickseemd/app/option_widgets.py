@@ -299,7 +299,10 @@ class NumberControl(Control):
         self._spin.set_numeric(True)
         self._spin.set_halign(Gtk.Align.START)
         self._spin.connect("value-changed", self._changed)
-        return with_suggestions(self._spin, self.opt, self.emit)
+        # 數字框不能留白：提示文字（含 dynamic_placeholder）以淡色小字放在旁邊
+        self._hint = label("", "qs-small", "qs-dim")
+        self._hint.set_visible(False)
+        return with_suggestions(hbox(8, self._spin, self._hint), self.opt, self.emit)
 
     def _changed(self, spin: Gtk.SpinButton) -> None:
         self.emit(om.coerce_number(self.opt, spin.get_value(), self.state.range(self.opt)))
@@ -309,6 +312,9 @@ class NumberControl(Control):
         v = self.value
         if v is not None and abs(self._spin.get_value() - float(v)) > 1e-9:
             self._spin.set_value(float(v))
+        hint = self.state.placeholder(self.opt)
+        self._hint.set_label(hint)
+        self._hint.set_visible(bool(hint))
 
 
 class ToggleControl(Control):
@@ -365,6 +371,9 @@ class TextControl(Control):
         text = "" if self.value is None else str(self.value)
         if self._entry.get_text() != text:
             self._entry.set_text(text)
+        hint = self.state.placeholder(self.opt, self.placeholder())
+        if self._entry.get_property("placeholder-text") != hint:
+            self._entry.set_property("placeholder-text", hint)
 
 
 class PasswordControl(TextControl):

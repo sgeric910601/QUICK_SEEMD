@@ -147,7 +147,7 @@ def test_relevant_sections(paths):
     assert only(c, "m4a") == ["bitrate"]
     assert only(d, "png") == ["size", "pdf_dpi"]
     assert only(e, "utf8") == ["encoding"]
-    assert m.detected_encoding() == "UTF-8 · LF"
+    assert m.detected_encoding() == "UTF-8"
 
 
 def test_convert_flow_and_banner(paths):
@@ -262,9 +262,50 @@ def test_output_mode_and_folder(tmp_path, paths):
 def test_analyze_path_with_fake_engine(monkeypatch, paths):
     monkeypatch.setattr(converter, "targets_for", lambda p: [T("jpeg")])
     monkeypatch.setattr(converter, "unavailable", lambda p: [Unavailable("HEIC", "需要安裝", None)])
+    monkeypatch.setattr(converter, "describe", lambda p: ("純文字", "UTF-8 · LF"))
     a = cmod.analyze_path(paths[0])
     assert [t.id for t in a.targets] == ["jpeg"] and a.unavailable[0].formats == "HEIC"
     assert not a.engine_missing
+    assert (a.kind, a.detail) == ("純文字", "UTF-8 · LF")
+
+
+def test_analyze_path_describe_failure_keeps_mime_kind(monkeypatch, paths):
+    def broken(p):  # noqa: ANN001, ANN202
+        raise RuntimeError("bad")
+
+    monkeypatch.setattr(converter, "targets_for", lambda p: [T("jpeg")])
+    monkeypatch.setattr(converter, "unavailable", lambda p: [])
+    monkeypatch.setattr(converter, "describe", broken)
+    a = cmod.analyze_path(paths[0])
+    assert a.kind and a.detail is None and [t.id for t in a.targets] == ["jpeg"]
+
+
+def test_analyze_path_real_engine(tmp_path):
+    csv = tmp_path / "表.csv"
+    csv.write_text("名稱,數量\n蘋果,3\n", "utf-8")
+    a = cmod.analyze_path(csv)
+    assert not a.engine_missing and a.is_textual
+    assert a.detail and a.detail.startswith("UTF-8")
+    assert "json" in {t.id for t in a.targets}
+
+
+def test_detected_encoding_from_detail(paths):
+    m = _model_with(
+        paths[:3],
+        [
+            _analysis(["utf8"], is_textual=True, detail="UTF-8 · LF"),
+            _analysis(["utf8"], is_textual=True, detail="UTF-8 · CRLF"),
+            _analysis(["utf8"], is_textual=True, detail="Big5 · LF"),
+        ],
+    )
+    a, b, c = (j.uid for j in m.jobs)
+    m.select(a, extend=False)
+    m.select(b, extend=True)
+    assert m.detected_encoding() == "UTF-8"
+    m.select(c, extend=True)
+    assert m.detected_encoding() == "多種編碼"
+    assert cmod.encoding_of("UTF-8（含 BOM） · CRLF") == "UTF-8（含 BOM）"
+    assert cmod.encoding_of("Big5") == "Big5"
 
 
 def test_analyze_path_engine_missing(monkeypatch, paths):
