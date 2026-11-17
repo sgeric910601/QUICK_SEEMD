@@ -138,8 +138,9 @@ def run(
         duration = media_duration(path, profile)
         run_ffmpeg(ffmpeg_arguments(src, str(out), fmt.id, options), duration, ctx)
     elif backend == "pandoc":
-        args = pandoc_arguments(src, str(out), profile.pandoc_reader, fmt.id)
-        ctx.run_process([backends.require("pandoc"), *args], "pandoc", cwd=path.parent)
+        from . import pandocrun  # noqa: PLC0415
+
+        pandocrun.convert(path, profile.pandoc_reader, fmt.id, out, work, ctx)
     elif backend == "soffice":
         from . import office  # noqa: PLC0415
 
