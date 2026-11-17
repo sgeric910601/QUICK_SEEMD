@@ -70,12 +70,13 @@ def color_option(
     choices: tuple[Choice, ...],
     default: str,
     *,
+    custom_default: str,
     group: str | None = None,
     group_icon: str | None = None,
     visible: Predicate | None = None,
     note: NoteFunc | None = None,
 ) -> Option:
-    """顏色膠囊＋自訂色（自訂色存在「鍵_custom」）。"""
+    """顏色膠囊＋自訂色（自訂色以 "#rrggbb" 存在「鍵_custom」，預設值是 custom_default）。"""
     return Option(
         key=key,
         kind=Kind.COLOR,
@@ -83,6 +84,7 @@ def color_option(
         default=default,
         choices=choices,
         custom_key=f"{key}_custom",
+        custom_default=custom_default,
         group=group,
         group_icon=group_icon,
         visible=visible,
@@ -90,8 +92,10 @@ def color_option(
     )
 
 
-def color_value(values: Values, key: str, custom_default: colors.Rgba) -> colors.Rgba:
-    return colors.parse(values.get(key), values.get(f"{key}_custom"), custom_default)
+def color_value(values: Values, key: str, custom_default: str) -> colors.Rgba:
+    """選項值 → 顏色；自訂色沒有值（或看不懂）時用選項宣告的 custom_default。"""
+    fallback = colors.parse(custom_default)
+    return colors.parse(values.get(key), values.get(f"{key}_custom"), fallback)
 
 
 def dynamic_note(key: str, note: NoteFunc, *, group: str | None = None, **kw: Any) -> Option:

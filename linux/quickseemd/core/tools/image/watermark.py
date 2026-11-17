@@ -1,6 +1,6 @@
 """加入浮水印（對應原版 ITWatermarkTool）。
 
-- 文字：Noto Sans CJK TC（粗體／一般），字高＝短邊 × 百分比（至少 6 px）。
+- 文字：Noto Sans CJK TC（粗體／一般；先問 fc-match，再找固定位置），字高＝短邊 × 百分比（至少 6 px）。
 - 陰影（只有文字）：往下偏移 字高 × 0.05、模糊 字高 × 0.18；淺色字配黑色 50%，深色字配白色 50%。
 - 單一位置：九宮格，留邊＝短邊 × 0.04，以旋轉後的外框計算。
 - 平鋪：橫向間距 max(寬 × 0.6, 短邊 × 0.08)，縱向 max(高 × 2.2, 短邊 × 0.08)，奇數列錯開半格；
@@ -9,13 +9,14 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import math
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from ... import errors, process
+from ... import backends, errors, process
 from ...model import ToolContext, per_file
 from ...options import Choice, Info, Kind, Option, Values
 from . import colors, loader, pipeline, writer
@@ -25,31 +26,54 @@ log = logging.getLogger(__name__)
 
 NOTO_DIRS = (Path("/usr/share/fonts/opentype/noto"), Path("/usr/share/fonts/truetype/noto"))
 TC_INDEX = 3  # NotoSansCJK-*.ttc 的第 4 個字型是繁體中文
-FC_MATCH = Path("/usr/bin/fc-match")
-CUSTOM_COLOR = colors.Rgba(0.89, 0.2, 0.18)
+CUSTOM_COLOR = "#e3332e"  # 原版 (0.89, 0.2, 0.18)
 POSITIONS = ("左上", "上方", "右上", "左側", "正中央", "右側", "左下", "下方", "右下")
 
 
 # ---------------------------------------------------------------- 字型
 
 
-def _font_file(bold: bool) -> tuple[str, int] | None:
+def _is_noto_cjk(path: str, index: int) -> bool:
+    """fc-match 找不到時會給別的字型；只接受真的是 Noto Sans CJK 的檔案。"""
+    try:
+        family = ImageFont.truetype(path, 12, index=index).getname()[0] or ""
+    except (OSError, ValueError):
+        return False
+    return family.startswith("Noto Sans CJK")
+
+
+def _fc_match(bold: bool) -> tuple[str, int] | None:
+    exe = backends.find("fc-match")
+    if exe is None:
+        return None
+    pattern = f"Noto Sans CJK TC:{'bold' if bold else 'regular'}"
+    try:
+        res = process.run([exe, "-f", "%{file}|%{index}", pattern], timeout=10)
+    except errors.QSError as exc:
+        log.warning("fc-match 執行失敗：%s", exc)
+        return None
+    path, _sep, index = res.stdout.strip().partition("|")
+    if res.returncode != 0 or not path or not Path(path).is_file():
+        return None
+    found = (path, int(index) if index.isdigit() else 0)
+    return found if _is_noto_cjk(*found) else None
+
+
+@functools.lru_cache(maxsize=4)
+def font_file(bold: bool) -> tuple[str, int] | None:
+    """Noto Sans CJK TC 的檔案與字型索引：先問 fontconfig，再找固定的安裝位置。"""
+    found = _fc_match(bold)
+    if found is not None:
+        return found
     name = "NotoSansCJK-Bold.ttc" if bold else "NotoSansCJK-Regular.ttc"
     for folder in NOTO_DIRS:
         if (folder / name).is_file():
             return str(folder / name), TC_INDEX
-    if not FC_MATCH.is_file():
-        return None
-    pattern = f"Noto Sans CJK TC:{'bold' if bold else 'regular'}"
-    res = process.run([str(FC_MATCH), "-f", "%{file}|%{index}", pattern], timeout=10)
-    path, _sep, index = res.stdout.strip().partition("|")
-    if res.returncode == 0 and path and Path(path).is_file():
-        return path, int(index or 0)
     return None
 
 
 def load_font(size: int, bold: bool) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    found = _font_file(bold)
+    found = font_file(bold)
     if found is not None:
         try:
             return ImageFont.truetype(found[0], max(6, size), index=found[1])
@@ -263,6 +287,7 @@ OPTIONS: tuple[Option, ...] = (
         "顏色",
         (colors.WHITE_CHOICE, colors.BLACK_CHOICE, colors.CUSTOM_CHOICE),
         "#ffffff",
+        custom_default=CUSTOM_COLOR,
         group="文字",
         visible=_is_text,
     ),

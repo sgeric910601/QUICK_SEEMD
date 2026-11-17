@@ -12,13 +12,14 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw
 
 from ...model import ToolContext, per_file
-from ...options import Choice, Kind, Option, Values
+from ...options import Choice, Info, Kind, Option, Values
 from . import colors, icon_io, loader, pipeline, writer
 from .common import color_option, color_value, define, quality_text
 
 MASTER_SIDE = 1024
 _SUPERSAMPLE = 4
 CORNER_RATIO = 0.225
+CUSTOM_BACKGROUND = "#ffffff"  # 原版自訂色預設白色
 ICONSET_POINTS: tuple[int, ...] = (16, 32, 128, 256, 512)
 PNG_SIDES: tuple[int, ...] = (16, 32, 48, 64, 128, 180, 192, 256, 512, 1024)
 
@@ -141,8 +142,15 @@ def _options_from(values: Values) -> IconOptions:
         output=str(values.get("output", "icns")),
         shape=str(values.get("shape", "rounded")),
         padding=float(values.get("padding", 0.1)),
-        background=color_value(values, "background", colors.WHITE),
+        background=color_value(values, "background", CUSTOM_BACKGROUND),
     )
+
+
+def adjust(values: Values, changed: str, info: Info) -> Values:
+    """換形狀時重設四周留白（原版 shape 的 didSet）。"""
+    if changed != "shape":
+        return {}
+    return {"padding": 0.1 if values.get("shape") == "rounded" else 0.0}
 
 
 def run(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
@@ -200,6 +208,7 @@ OPTIONS: tuple[Option, ...] = (
         "背景",
         (colors.TRANSPARENT_CHOICE, colors.WHITE_CHOICE, colors.BLACK_CHOICE, colors.CUSTOM_CHOICE),
         "transparent",
+        custom_default=CUSTOM_BACKGROUND,
         group="背景",
         group_icon="square.fill",
     ),
@@ -225,4 +234,5 @@ TOOL = define(
         "應用程式圖示",
     ),
     options=OPTIONS,
+    adjust=adjust,
 )

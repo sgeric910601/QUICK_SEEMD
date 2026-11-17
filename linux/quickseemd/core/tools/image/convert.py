@@ -14,7 +14,7 @@ from . import colors, formats, make_icon, pipeline, writer
 from .common import color_option, color_value, define, dynamic_note, quality_text
 
 FORMAT_ORDER: tuple[str, ...] = tuple(formats.FORMATS)
-CUSTOM_BACKGROUND = colors.Rgba(0.96, 0.94, 0.88)
+CUSTOM_BACKGROUND = "#f5f0e0"  # 原版 (0.96, 0.94, 0.88)
 _ALL_CHOICES: tuple[Choice, ...] = tuple(
     Choice(fid, formats.get(fid).title, formats.HINTS[fid]) for fid in FORMAT_ORDER
 )
@@ -105,6 +105,7 @@ OPTIONS: tuple[Option, ...] = (
         "透明部分的底色",
         (colors.WHITE_CHOICE, colors.BLACK_CHOICE, colors.CUSTOM_CHOICE),
         "#ffffff",
+        custom_default=CUSTOM_BACKGROUND,
         group="透明部分的底色",
         group_icon="square.on.square.dashed",
         visible=lambda v, i: not _fmt(v).alpha,
