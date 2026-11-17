@@ -113,16 +113,73 @@ def test_pandoc_and_magick_arguments() -> None:
         "-o",
         "/b",
     ]
-    assert external.magick_arguments("/x.xcf", "/y.png", {"image_quality": 0.85}, False) == [
-        "/x.xcf[0]",
+
+
+def test_magick_arguments_name_the_coder() -> None:
+    from quickseemd.core.converter import magick
+
+    args = magick.arguments("/s/in.xcf", "/s/out.png", {"image_quality": 0.85}, False, "xcf", "png")
+    assert args[: len(magick.LIMITS)] == list(magick.LIMITS)
+    assert args[len(magick.LIMITS) :] == [
+        "XCF:/s/in.xcf[0]",
         "-auto-orient",
         "-quality",
         "85",
-        "/y.png",
+        "PNG:/s/out.png",
     ]
-    assert external.magick_arguments(
-        "/x", "/y", {"image_max_pixel": 512, "image_quality": 1}, True
-    )[2:4] == ["-resize", "512x512>"]
+    keep = magick.arguments(
+        "/a", "/b", {"image_max_pixel": 512, "image_quality": 1}, True, "gif", "webp"
+    )
+    assert (
+        "GIF:/a" in keep
+        and ["-resize", "512x512>"] == keep[keep.index("-resize") : keep.index("-resize") + 2]
+    )
+    assert "-limit" in keep and "time" in keep
+    for pattern in ("MVG", "MSL", "TEXT", "EPS", "PDF", "XPS", "URL", "HTTPS", "EPHEMERAL"):
+        assert pattern in magick.POLICY
+    assert '<policy domain="path" rights="none" pattern="@*"/>' in magick.POLICY
+    with pytest.raises(errors.QSError):
+        magick.coder("")
+
+
+def test_magick_route_uses_safe_names_and_policy(
+    tmp_path: Path, outdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from quickseemd.core.converter import capabilities
+
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    log = tmp_path / "magick.log"
+    script = fake / "convert"
+    script.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-list" ]; then echo "      PNG* PNG       rw-   Portable"; echo "     WEBP* WEBP      rw-   WebP"; exit 0; fi\n'
+        f'printf "%s\\n" "$@" > {log}\n'
+        f'printf "%s\\n" "$MAGICK_CONFIGURE_PATH" >> {log}\n'
+        'last=""; for a in "$@"; do last="$a"; done\n'
+        'printf "png" > "${last#*:}"\n'
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("QUICKSEEMD_TOOL_PATH", f"{fake}:{os.environ['QUICKSEEMD_TOOL_PATH']}")
+    backends.refresh()
+    capabilities.refresh()
+    try:
+        src = tmp_path / "art[1]%d.xcf"
+        src.write_bytes(b"gimp xcf v011\x00" + b"\x00" * 64)
+        [out] = run(src, "png", outdir)
+    finally:
+        monkeypatch.undo()
+        backends.refresh()
+        capabilities.refresh()
+    assert out.name == "art[1]%d.png" and out.read_bytes() == b"png"
+    lines = log.read_text().splitlines()
+    assert any(line.startswith("XCF:") and line.endswith("/in.xcf[0]") for line in lines)
+    assert any(line.startswith("PNG:") and line.endswith("/out.png") for line in lines)
+    assert "-limit" in lines
+    policy_dir = Path(lines[-1])
+    assert policy_dir.name.startswith(".magick-")
 
 
 def test_progress_parser() -> None:

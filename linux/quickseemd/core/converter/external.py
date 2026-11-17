@@ -114,15 +114,6 @@ def pandoc_arguments(input_path: str, output: str, reader: str | None, fid: str)
     return args + ["--sandbox", "-o", output]
 
 
-def magick_arguments(input_path: str, output: str, options: dict, keep_frames: bool) -> list[str]:
-    args = [input_path if keep_frames else input_path + "[0]", "-auto-orient"]
-    max_side = options.get("image_max_pixel")
-    if max_side:
-        args += ["-resize", f"{int(max_side)}x{int(max_side)}>"]
-    quality = int(round(float(options.get("image_quality", 0.85)) * 100))
-    return args + ["-quality", str(quality), output]
-
-
 def run(
     path: Path,
     profile: Profile,
@@ -147,9 +138,9 @@ def run(
         produced = office.convert_file(path, fmt.id, work, ctx)
         os.rename(produced, out)
     elif backend == "magick":
-        keep = fmt.id in ("gif", "webp", "tiff")
-        args = magick_arguments(src, str(out), options, keep)
-        ctx.run_process([backends.require("magick"), *args], "ImageMagick")
+        from . import magick  # noqa: PLC0415
+
+        magick.convert(path, out, fmt.id, options, work, ctx)
     else:
         raise errors.QSError("內部錯誤：原生格式不應交給外部引擎。")
     if not out.exists():
