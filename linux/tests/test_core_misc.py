@@ -1,0 +1,267 @@
+"""設定、完成頁文字、輪盤、外部程式、工作程序。"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from quickseemd.core import errors, process, result, settings, wheel
+from quickseemd.core.filetypes import FileRef
+from quickseemd.core.jobs import WorkerJob
+from quickseemd.core.model import TINTS, ToolContext, per_file
+from quickseemd.core.runner import JobSpec, run_spec
+
+# ------------------------------------------------------------------ 設定
+
+
+def test_settings_defaults_and_save():
+    s = settings.load()
+    assert s["wheel.key.convert"] == "shift"
+    settings.save({"wheel.key.tools": "super"})
+    assert settings.get("wheel.key.tools") == "super"
+    stored = json.loads(settings.settings_path().read_text("utf-8"))
+    assert stored == {"wheel.key.tools": "super"}  # 只存和預設不同的值
+    with pytest.raises(KeyError):
+        settings.save({"nope": 1})
+    with pytest.raises(TypeError):
+        settings.save({"wheel.enabled": "yes"})
+
+
+def test_settings_corrupt_file_falls_back():
+    settings.config_dir().mkdir(parents=True, exist_ok=True)
+    settings.settings_path().write_text("{壞掉", "utf-8")
+    assert settings.load()["wheel.enabled"] is True
+
+
+# ------------------------------------------------------------------ 完成頁
+
+
+def test_format_size():
+    assert result.format_size(512) == "512 位元組"
+    assert result.format_size(8_000) == "8 KB"
+    assert result.format_size(2_100_000) == "2.1 MB"
+    assert result.format_size(10_600_000) == "10.6 MB"
+
+
+def test_summary_filters_progress_messages(tmp_path):
+    f = tmp_path / "a.pdf"
+    assert result.summary_text("處理中：a.pdf", [f]) is None
+    assert result.summary_text("a.pdf", [f]) is None
+    assert result.summary_text("已壓縮：1 MB → 500 KB（減少 50%）", [f]).startswith("已壓縮")
+
+
+def test_detail_lines_savings(tmp_path):
+    a = tmp_path / "a.jpg"
+    a.write_bytes(b"x" * 1000)
+    b = tmp_path / "b.jpg"
+    b.write_bytes(b"x" * 400)
+    lines = result.detail_lines([a], [b], None)
+    assert lines[0] == ("從 1 KB 縮小到 400 位元組，省下 60%", "good")
+    assert lines[-1][0] == f"儲存在「{tmp_path.name}」資料夾"
+
+
+def test_headline():
+    assert result.headline([]) == "完成！"
+    assert result.headline([Path("a")]) == "檔案已經準備好了！"
+    assert result.headline([Path("a"), Path("b")]) == "2 個檔案已經準備好了！"
+
+
+# ------------------------------------------------------------------ 輪盤
+
+
+def test_hit_test_geometry():
+    assert wheel.hit_test(0, 0, 6) == "center"
+    assert wheel.hit_test(0, -150, 6) == 0  # 正上方
+    assert wheel.hit_test(150, 0, 4) == 1  # 右邊（順時針第 2 格）
+    assert wheel.hit_test(0, 150, 4) == 2
+    assert wheel.hit_test(-150, 0, 4) == 3
+    assert wheel.hit_test(0, -300, 6) is None
+
+
+def test_short_title():
+    assert wheel.short_title("轉成 Word（.docx）") == "Word"
+    assert wheel.short_title("轉成JPG") == "JPG"
+    assert wheel.short_title("壓縮 PDF（建議）") == "壓縮 PDF"
+
+
+def _cat(mode, refs, targets=()):
+    return wheel.catalog(
+        mode,
+        refs,
+        minimum_files={"pdf.merge": 2},
+        tint_for_tool=lambda _t: TINTS["pdf"],
+        targets=lambda: targets,
+    )
+
+
+def test_tools_wheel_single_pdf():
+    titles = [i.title for i in _cat("tools", [FileRef("/a.pdf", "application/pdf")])]
+    # 「轉成可搜尋的 PDF」以「轉成」開頭，歸轉換輪盤
+    assert titles == [
+        "壓縮 PDF",
+        "每一頁拆成一個 PDF",
+        "向右旋轉 90°",
+        "加上頁碼",
+        "壓縮成 ZIP",
+        "更多工具",
+    ]
+
+
+def test_convert_wheel_dedupes_and_ends_with_more():
+    refs = [FileRef("/a.png", "image/png")]
+    targets = [
+        wheel.TargetLike("jpeg", "JPEG", "image", 0, "photo"),
+        wheel.TargetLike("webp", "WebP", "image", 0, "photo"),
+        wheel.TargetLike("pdf", "PDF", "document", 1, "doc.text"),
+        wheel.TargetLike("zip", "ZIP", "archive", 6, "archivebox"),
+    ]
+    items = _cat("convert", refs, targets)
+    titles = [i.title for i in items]
+    assert titles[:3] == ["JPG", "PNG", "HEIC"]
+    assert "JPEG" not in titles  # 和「轉成 JPG」重複
+    assert "PDF" in titles and "WebP" in titles and "ZIP" not in titles
+    assert items[-1].kind == "more" and len(items) <= wheel.MAX_SECTORS
+
+
+def test_actions_wheel_fixed():
+    items = _cat("actions", [FileRef("/a", "text/plain")])
+    assert [i.payload for i in items] == [
+        "open-with",
+        "shelf",
+        "copy",
+        "move",
+        "copy-path",
+        "terminal",
+    ]
+
+
+def test_hint_line():
+    keys = {"convert": "shift", "tools": "alt", "actions": "control"}
+    labels = dict(settings.WHEEL_KEYS)
+    assert wheel.hint_line("convert", keys, labels) == "⌥ 工具  ⌃ 動作  esc 取消"
+
+
+# ------------------------------------------------------------------ 外部程式與取消
+
+
+def test_process_requires_absolute_path():
+    with pytest.raises(ValueError):
+        process.run(["sleep", "1"])
+
+
+def test_process_failure_message():
+    with pytest.raises(errors.QSError, match="測試工具 轉換失敗"):
+        process.run_checked(["/usr/bin/false"], "測試工具")
+
+
+def test_process_cancel_kills_group():
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    started = time.monotonic()
+    with pytest.raises(errors.Cancelled):
+        process.run(["/usr/bin/sleep", "30"], cancel=cancel)
+    assert time.monotonic() - started < 5
+    assert not process.SPAWNED
+
+
+def test_context_progress_segments_and_per_file(tmp_path):
+    seen = []
+    ctx = ToolContext(None, lambda f, m: seen.append((round(f, 2), m)))
+    files = [tmp_path / "a.txt", tmp_path / "b.txt"]
+
+    def body(f, sub):
+        sub.progress(0.5)
+        if f.name == "b.txt":
+            raise errors.SkipFile("略過 b")
+        return [f]
+
+    out = per_file(files, ctx, body)
+    assert out == [files[0]]
+    assert ctx.skipped == ["略過 b"]
+    assert (0.25, "處理中：a.txt") in seen and seen[-1][0] == 1.0
+
+
+# ------------------------------------------------------------------ 工作程序
+
+SLEEP_TOOL = """
+import time
+from pathlib import Path
+from quickseemd.core.model import OTHER, ToolDefinition
+
+def _run(files, values, ctx):
+    for i in range(300):
+        ctx.check_cancelled()
+        ctx.progress(i / 300, "睡覺中")
+        time.sleep(0.05)
+    return []
+
+def _echo(files, values, ctx):
+    ctx.progress(1, "完成了")
+    return [Path(files[0])]
+
+TOOLS = [
+    ToolDefinition("test.sleep", OTHER, "睡", "測試用", "bolt", _run),
+    ToolDefinition("test.echo", OTHER, "回聲", "測試用", "bolt", _echo),
+]
+"""
+
+
+@pytest.fixture
+def extra_tools(tmp_path, monkeypatch):
+    pkg = tmp_path / "qs_extra"
+    pkg.mkdir()
+    (pkg / "qs_test_tools.py").write_text(SLEEP_TOOL, "utf-8")
+    monkeypatch.setenv("PYTHONPATH", str(pkg))
+    monkeypatch.setenv("QUICKSEEMD_EXTRA_TOOLS", "qs_test_tools")
+    sys.path.insert(0, str(pkg))
+    from quickseemd.core import registry
+
+    registry.reload()
+    yield
+    sys.path.remove(str(pkg))
+    registry.reload()
+
+
+def test_runner_in_process(extra_tools, tmp_path):
+    f = tmp_path / "x.txt"
+    f.write_text("x")
+    res = run_spec(JobSpec("tool", "test.echo", [str(f)]))
+    assert res.error is None and res.outputs == [f] and res.summary == "完成了"
+    assert res.to_json()["outputs"] == [str(f)]
+
+
+def test_runner_unknown_action():
+    res = run_spec(JobSpec("action", "nope.nope", ["/tmp"]))
+    assert res.error == "這個版本的 QUICK_SEEMD 不認得動作「nope.nope」。"
+
+
+def test_worker_roundtrip(extra_tools, tmp_path):
+    f = tmp_path / "x.txt"
+    f.write_text("x")
+    job = WorkerJob(JobSpec("tool", "test.echo", [str(f)]), python=sys.executable)
+    job.start()
+    res = job.wait(30)
+    assert res is not None and res.get("outputs") == [str(f)], res
+
+
+def test_worker_cancel(extra_tools, tmp_path):
+    progress = []
+    job = WorkerJob(
+        JobSpec("tool", "test.sleep", [str(tmp_path)]),
+        on_progress=lambda f, m: progress.append(f),
+        python=sys.executable,
+    )
+    job.start()
+    deadline = time.monotonic() + 15
+    while not progress and time.monotonic() < deadline:
+        time.sleep(0.05)
+    job.cancel()
+    res = job.wait(15)
+    assert res is not None and res.get("cancelled") is True
+    assert job._proc is not None and job._proc.returncode is not None  # 程序已結束並回收
