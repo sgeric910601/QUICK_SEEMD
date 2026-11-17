@@ -11,7 +11,7 @@ import conftest
 from quickseemd.core import backends, errors
 from quickseemd.core import preview as core_preview
 from quickseemd.core.preview import Document
-from quickseemd.previewer import content, fallback, soffice_local
+from quickseemd.previewer import content, fallback
 from quickseemd.previewer.uri import Target, TargetKind
 
 
@@ -275,8 +275,6 @@ def office_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pdf_file: Path):
     monkeypatch.setenv("QUICKSEEMD_TOOL_PATH", str(bindir))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setenv("FAKE_PDF", str(pdf_file))
-    # 假的 soffice 要讀 /tmp 底下的測試檔，不包 bwrap
-    monkeypatch.setattr(soffice_local, "sandbox_available", lambda: False)
     backends.refresh()
     yield monkeypatch
     backends.refresh()

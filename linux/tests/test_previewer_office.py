@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from quickseemd.core import backends, errors
-from quickseemd.previewer import office, soffice_local
+from quickseemd.core import backends, errors, process
+from quickseemd.core import soffice
+from quickseemd.previewer import office
 
 FAKE_SOFFICE = """#!/usr/bin/python3
 import json, os, sys
@@ -36,12 +37,6 @@ if mode != "silent":
     with open(os.path.join(outdir, stem + ".pdf"), "xb") as out:
         out.write(b"%PDF-1.4 fake")
 """
-
-
-@pytest.fixture(autouse=True)
-def no_sandbox_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """假的 soffice 要讀寫 /tmp 底下的測試檔，預設不包 bwrap；真機測試另外指定。"""
-    monkeypatch.setattr(soffice_local, "sandbox_available", lambda: False)
 
 
 @pytest.fixture(autouse=True)
@@ -130,8 +125,8 @@ def test_convert_arguments(tmp_path: Path, fake_soffice: Path):
     assert os.path.isabs(outdir)
     assert args[-1] == str(src)
     profile = next(a for a in args if a.startswith("-env:UserInstallation="))
-    # 設定檔資料夾與輸出資料夾是這次專用的暫存資料夾
-    assert Path(outdir).parent.name.startswith("job-")
+    # 設定檔資料夾與輸出資料夾都在這次專用的暫存資料夾裡（結束後整個清掉）
+    assert any(part.startswith("job-") for part in Path(outdir).parts)
     assert "job-" in profile
 
 
@@ -188,13 +183,13 @@ def test_missing_soffice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_timeout_is_passed(tmp_path: Path, fake_soffice: Path, monkeypatch: pytest.MonkeyPatch):
     seen: dict = {}
-    real_run = office.process.run
+    real_run = process.run
 
     def spy(args, **kw):  # noqa: ANN001, ANN003
         seen.update(kw)
         return real_run(args, **kw)
 
-    monkeypatch.setattr(office.process, "run", spy)
+    monkeypatch.setattr(process, "run", spy)
     office.convert_to_pdf(_docx(tmp_path))
     assert seen["timeout"] == office.CONVERT_TIMEOUT == 60
 
@@ -245,16 +240,14 @@ def test_profile_blocks_untrusted_links(tmp_path: Path, fake_soffice: Path, monk
 
 
 def test_profile_helper_never_overwrites(tmp_path: Path):
-    profile = tmp_path / "profile"
-    soffice_local.prepare_profile(profile)
-    xcu = profile / "user" / "registrymodifications.xcu"
-    assert xcu.is_file()
+    profile = soffice.make_profile(tmp_path)
+    assert (profile / "user" / "registrymodifications.xcu").is_file()
     with pytest.raises(FileExistsError):
-        soffice_local.prepare_profile(profile)
+        soffice.make_profile(tmp_path)
 
 
 def test_registry_hardening_settings():
-    xml = soffice_local.registry_xml()
+    xml = soffice.registry_xml()
     expected = [
         ("/org.openoffice.Office.Common/Security/Scripting", "BlockUntrustedRefererLinks", "true"),
         ("/org.openoffice.Office.Common/Security/Scripting", "DisableMacrosExecution", "true"),
@@ -273,49 +266,36 @@ def test_registry_hardening_settings():
         assert item in xml, name
 
 
+def test_sandbox_falls_back_without_bwrap(tmp_path: Path, monkeypatch):
+    empty = tmp_path / "no-tools"
+    empty.mkdir()
+    monkeypatch.setenv("QUICKSEEMD_TOOL_PATH", str(empty))
+    backends.refresh()
+    try:
+        assert soffice.sandbox_prefix(tmp_path) == []  # 沒有 bwrap：只靠設定檔
+    finally:
+        backends.refresh()
+
+
+def _sandbox(tmp_path: Path) -> list[str]:
+    backends.refresh()
+    return soffice.sandbox_prefix(tmp_path)
+
+
 def test_sandbox_prefix_limits_writes(tmp_path: Path):
-    profile, outdir, src = tmp_path / "p", tmp_path / "o", tmp_path / "文件.docx"
-    args = soffice_local.sandbox_prefix([profile, outdir], [src])
-    assert args[0] == soffice_local.BWRAP and args[-1] == "--"
+    args = _sandbox(tmp_path)
+    if not args:
+        pytest.skip("這台電腦不能用 bwrap")
     joined = " ".join(args)
-    for flag in ("--unshare-net", "--die-with-parent", "--ro-bind / /", "--dev /dev"):
+    for flag in ("--unshare-net", "--die-with-parent", "--ro-bind / /"):
         assert flag in joined
     binds = [args[i + 1] for i, a in enumerate(args) if a == "--bind"]
-    assert binds == [str(profile), str(outdir)]
-    ro = [args[i + 1] for i, a in enumerate(args) if a == "--ro-bind"]
-    assert ro == ["/", str(src)]
-    # 私有的 /tmp 要在掛入輸入檔之前（後面的掛載才看得到）
-    assert args.index("/tmp") < args.index(str(src))
-    assert "DBUS_SESSION_BUS_ADDRESS" in args
+    assert binds == [str(tmp_path.resolve())]  # 只有這次的暫存資料夾可寫
 
 
-def test_wrap_without_sandbox_returns_command_unchanged(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(soffice_local, "sandbox_available", lambda: False)
-    argv = ["/usr/bin/soffice", "x"]
-    assert soffice_local.wrap(argv, [tmp_path], [tmp_path / "a"]) == argv
-
-
-def test_sandbox_probe_reports_missing_bwrap(monkeypatch, caplog):
-    monkeypatch.setattr(soffice_local, "BWRAP", "/nonexistent/bwrap")
-    soffice_local.probe_sandbox.cache_clear()
-    try:
-        with caplog.at_level("WARNING"):
-            assert soffice_local.probe_sandbox() is False
-        assert "bwrap" in caplog.text
-    finally:
-        soffice_local.probe_sandbox.cache_clear()
-
-
-def _bwrap_works() -> bool:
-    soffice_local.probe_sandbox.cache_clear()
-    ok = soffice_local.probe_sandbox()
-    soffice_local.probe_sandbox.cache_clear()
-    return ok
-
-
-@pytest.mark.skipif(not os.access(soffice_local.BWRAP, os.X_OK), reason="沒有 bwrap")
 def test_sandbox_really_has_no_network(tmp_path: Path):
-    if not _bwrap_works():
+    prefix = _sandbox(tmp_path)
+    if not prefix:
         pytest.skip("這台電腦不能用 bwrap")
     from local_http import RecordingServer  # noqa: PLC0415
 
@@ -325,13 +305,8 @@ def test_sandbox_really_has_no_network(tmp_path: Path):
             "try:\n    urllib.request.urlopen(sys.argv[1], timeout=3)\n"
             "except OSError:\n    sys.exit(7)\n"
         )
-        argv = soffice_local.sandbox_prefix([tmp_path], []) + [
-            "/usr/bin/python3",
-            "-c",
-            code,
-            server.url("/probe"),
-        ]
-        res = office.process.run(argv, timeout=30)
+        argv = prefix + ["/usr/bin/python3", "-c", code, server.url("/probe")]
+        res = process.run(argv, timeout=30)
         assert res.returncode == 7
         assert not server.touched
 
@@ -352,11 +327,13 @@ def _leaky_documents(folder: Path, url) -> list[Path]:  # noqa: ANN001
 @pytest.mark.slow
 @pytest.mark.parametrize("sandbox", [False, True], ids=["只靠設定", "加上bwrap"])
 def test_real_libreoffice_never_touches_the_network(tmp_path: Path, monkeypatch, sandbox: bool):
+    """經過共用的 core.soffice：兩種模式下都不能有任何連線。"""
     if backends.find("soffice") is None:
         pytest.skip("沒有安裝 LibreOffice")
-    if sandbox and not _bwrap_works():
+    if sandbox and not _sandbox(tmp_path):
         pytest.skip("這台電腦不能用 bwrap")
-    monkeypatch.setattr(soffice_local, "sandbox_available", lambda: sandbox)
+    if not sandbox:
+        monkeypatch.setattr(soffice, "sandbox_prefix", lambda _writable: [])
     from local_http import RecordingServer  # noqa: PLC0415
 
     with RecordingServer() as server:
@@ -369,7 +346,7 @@ def test_real_libreoffice_never_touches_the_network(tmp_path: Path, monkeypatch,
 
 @pytest.mark.slow
 def test_control_plain_profile_does_fetch_linked_image(tmp_path: Path):
-    """對照組：沒有安全設定的設定檔真的會去抓圖片（證明測試抓得到問題）。"""
+    """對照組：沒有安全設定的設定檔、不隔離時真的會去抓圖片（證明測試抓得到問題）。"""
     if backends.find("soffice") is None:
         pytest.skip("沒有安裝 LibreOffice")
     import odf_samples as s  # noqa: PLC0415
@@ -380,6 +357,6 @@ def test_control_plain_profile_does_fetch_linked_image(tmp_path: Path):
         profile, outdir = tmp_path / "plain-profile", tmp_path / "out"
         (profile / "user").mkdir(parents=True)
         outdir.mkdir()
-        argv = soffice_local.convert_args(backends.require("soffice"), doc, profile, outdir)
-        office.process.run(argv, timeout=60)
+        argv = soffice.arguments(doc, "pdf", outdir, profile, None)
+        process.run(argv, timeout=60)
         assert server.touched
