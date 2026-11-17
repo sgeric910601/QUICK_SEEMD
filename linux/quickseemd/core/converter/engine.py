@@ -118,7 +118,11 @@ def convert(path: Path, format_id: str, ctx, options: dict[str, Any]) -> list[Pa
     naming.ensure_writable(out_dir)
     work = ctx.make_work_dir(out_dir)
     ctx.progress(0)
-    produced = _route_function(target.route)(path, profile, target.format, options, work, ctx)
+    func = _route_function(target.route)
+    if target.route == "external":
+        produced = func(path, profile, target.format, options, work, ctx, backend=target.backend)
+    else:
+        produced = func(path, profile, target.format, options, work, ctx)
     ctx.check_cancelled()
     delivered = [ctx.deliver(item, item.name, path) for item in produced]
     ctx.progress(1, _finish_message(delivered))
