@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from ...model import ToolDefinition
-from . import convert, make_icon, strip_metadata
+from . import compress, convert, make_icon, strip_metadata
 
 TOOLS: list[ToolDefinition] = [
     convert.TOOL,
+    compress.TOOL,
     strip_metadata.TOOL,
     make_icon.TOOL,
 ]
