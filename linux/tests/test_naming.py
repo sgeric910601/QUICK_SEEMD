@@ -175,3 +175,44 @@ def _fake_stat_other_device(real_stat, other):
         return _St(st, st.st_dev + 1) if str(p) == str(other) else st
 
     return fake
+
+
+def test_cross_device_copy_never_leaves_partial_final_name(tmp_path, monkeypatch):
+    import errno as _errno
+    import shutil as _shutil
+
+    src = tmp_path / "work" / "big.bin"
+    src.parent.mkdir()
+    src.write_bytes(b"x" * 100000)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+
+    def exdev(s, d):
+        raise OSError(_errno.EXDEV, "跨磁碟")
+
+    def broken_copy(fin, fout, length=0):
+        fout.write(b"half")
+        raise KeyboardInterrupt  # 模擬複製到一半被中斷
+
+    monkeypatch.setattr(naming, "_rename_noreplace_or_link", exdev)
+    monkeypatch.setattr(_shutil, "copyfileobj", broken_copy)
+    with pytest.raises(KeyboardInterrupt):
+        naming.commit(src, dest, "big.bin")
+    assert list(dest.iterdir()) == [] and src.exists()
+
+
+def test_cross_device_copy_publishes_atomically(tmp_path, monkeypatch):
+    import errno as _errno
+
+    src = tmp_path / "work" / "a.txt"
+    src.parent.mkdir()
+    src.write_text("內容")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+
+    def exdev(s, d):
+        raise OSError(_errno.EXDEV, "跨磁碟")
+
+    monkeypatch.setattr(naming, "_rename_noreplace_or_link", exdev)
+    out = naming.commit(src, dest, "a.txt")
+    assert out.read_text() == "內容" and [p.name for p in dest.iterdir()] == ["a.txt"]

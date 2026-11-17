@@ -115,12 +115,67 @@ def _rename_noreplace(src: Path, dst: Path) -> None:
         raise OSError(err, os.strerror(err), str(dst))
 
 
+PART_PREFIX = ".quickseemd-part-"
+
+
+def _part_path(dst: Path) -> Path:
+    """和 dst 同一個資料夾的暫存名稱（複製到一半被中斷時，最終檔名不會出現半成品）。"""
+    return dst.parent / f"{PART_PREFIX}{os.getpid()}-{os.urandom(6).hex()}"
+
+
+def _publish(part: Path, dst: Path) -> None:
+    """把同一個資料夾裡複製好的暫存項目改成最終名稱，不覆蓋。"""
+    try:
+        _rename_noreplace(part, dst)
+        return
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        if exc.errno not in (errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP, errno.ENOTSUP):
+            raise
+    if part.is_dir():
+        os.mkdir(dst)  # 目的地已存在時丟 FileExistsError
+        _move_children(part, dst)
+        return
+    try:
+        os.link(part, dst, follow_symlinks=False)
+        os.unlink(part)
+        return
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        if exc.errno not in (errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP):
+            raise
+    # 檔案系統既不支援 RENAME_NOREPLACE 也不支援硬連結（exFAT 等）：最後才用一般改名
+    if os.path.lexists(dst):
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(dst))
+    os.rename(part, dst)
+
+
+def _discard_part(part: Path) -> None:
+    try:
+        if part.is_dir() and not part.is_symlink():
+            shutil.rmtree(part, ignore_errors=True)
+        elif os.path.lexists(part):
+            os.unlink(part)
+    except OSError:
+        pass
+
+
 def _copy_file_exclusive(src: Path, dst: Path) -> None:
-    with open(src, "rb") as fin, open(dst, "xb") as fout:
-        shutil.copyfileobj(fin, fout, 4 * 1024 * 1024)
-    shutil.copystat(src, dst, follow_symlinks=False)
-    if os.path.getsize(src) != os.path.getsize(dst):
-        raise OSError(errno.EIO, "複製後大小不符", str(dst))
+    """跨磁碟複製：先寫到同資料夾的暫存名稱、確認大小，再不覆蓋地改成最終名稱。"""
+    part = _part_path(dst)
+    _remember_outside(part)
+    try:
+        with open(src, "rb") as fin, open(part, "xb") as fout:
+            shutil.copyfileobj(fin, fout, 4 * 1024 * 1024)
+        shutil.copystat(src, part, follow_symlinks=False)
+        if os.path.getsize(src) != os.path.getsize(part):
+            raise OSError(errno.EIO, "複製後大小不符", str(dst))
+        _publish(part, dst)
+    except BaseException:
+        _discard_part(part)
+        raise
 
 
 def _tree_signature(root: Path) -> tuple[int, int]:
@@ -134,10 +189,19 @@ def _tree_signature(root: Path) -> tuple[int, int]:
 
 
 def _copy_tree_exclusive(src: Path, dst: Path) -> None:
-    os.mkdir(dst)  # 目的地已存在時丟 FileExistsError
-    shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
-    if _tree_signature(src) != _tree_signature(dst):
-        raise OSError(errno.EIO, "複製後內容不符", str(dst))
+    """跨磁碟複製資料夾：先複製到同資料夾的暫存名稱並確認內容，再不覆蓋地改成最終名稱。"""
+    if os.path.lexists(dst):
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(dst))
+    part = _part_path(dst)
+    _remember_outside(part)
+    try:
+        shutil.copytree(src, part, symlinks=True)
+        if _tree_signature(src) != _tree_signature(part):
+            raise OSError(errno.EIO, "複製後內容不符", str(dst))
+        _publish(part, dst)
+    except BaseException:
+        _discard_part(part)
+        raise
 
 
 def _move_children(src: Path, dst: Path) -> None:
@@ -309,10 +373,13 @@ def sweep_stale_work_dirs(max_age: float = STALE_SECONDS) -> int:
         listed = []
     for line in listed:
         p = Path(line)
-        if not p.name.startswith(WORK_PREFIX) or not p.is_dir():
+        if not p.name.startswith(WORK_PREFIX) or p.is_symlink() or not os.path.lexists(p):
             continue
         if _is_stale(p, now, max_age):
-            remove_work_dir(p)
+            if p.name.startswith(PART_PREFIX):
+                _discard_part(p)  # 跨磁碟複製到一半留下的暫存檔或資料夾
+            else:
+                remove_work_dir(p)
             removed += 1
         else:
             keep.append(line)

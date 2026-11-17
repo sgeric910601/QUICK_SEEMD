@@ -70,9 +70,19 @@ def terminate_group(proc: subprocess.Popen[bytes]) -> None:
 
 
 def terminate_all() -> None:
-    """結束所有還在跑的子程序群組（工作程序收到取消時用）。"""
-    with _SPAWNED_LOCK:
-        pids = list(SPAWNED)
+    """結束所有還在跑的子程序群組（工作程序收到取消時用）。
+
+    會在訊號處理函式裡呼叫：不拿鎖（主執行緒可能正握著鎖，拿鎖會卡死），
+    直接複製一份清單；複製時剛好被改動就重試。
+    """
+    for _ in range(5):
+        try:
+            pids = tuple(SPAWNED)
+            break
+        except RuntimeError:  # 複製途中集合被改動
+            continue
+    else:
+        pids = ()
     for pid in pids:
         try:
             os.killpg(pid, signal.SIGTERM)

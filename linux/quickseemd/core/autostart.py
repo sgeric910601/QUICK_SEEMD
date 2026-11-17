@@ -18,7 +18,6 @@ from . import errors, settings
 LOG = logging.getLogger(__name__)
 MARKER = "X-QuickSeemd-Autostart=true"
 APP_ICON = "dev.quickseemd.App"
-_OUR_HINTS = (MARKER, "quickseemd-agent", "quickseemd.agent")
 _RESERVED = set(" \t\n\"'\\><~|&;$*?#()`")
 _ESCAPE_IN_QUOTES = set('"`$\\')
 
@@ -65,8 +64,22 @@ def _read(p: Path) -> str | None:
 
 
 def is_ours(p: Path | None = None) -> bool:
+    """有我們的標記行，或 Exec 的程式是 quickseemd-agent／python -m quickseemd.agent。"""
     text = _read(p or path())
-    return text is not None and any(h in text for h in _OUR_HINTS)
+    if text is None:
+        return False
+    lines = [line.strip() for line in text.splitlines()]
+    if MARKER in lines:
+        return True
+    for line in lines:
+        if not line.startswith("Exec="):
+            continue
+        words = line[len("Exec=") :].replace('"', " ").split()
+        if words and os.path.basename(words[0]) == "quickseemd-agent":
+            return True
+        if "-m" in words and "quickseemd.agent" in words:
+            return True
+    return False
 
 
 def enabled() -> bool:

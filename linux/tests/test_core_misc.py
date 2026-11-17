@@ -480,3 +480,23 @@ def test_worker_applies_image_budget_to_every_tool(tmp_path):
     job.start()
     res = job.wait(60)
     assert res is not None and "上限" in res.get("error", ""), res
+
+
+def test_autostart_ownership_is_strict():
+    from quickseemd.core import autostart, settings
+
+    p = settings.autostart_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("[Desktop Entry]\nExec=/usr/bin/other --note quickseemd-agent\n")
+    assert not autostart.is_ours(p)
+    p.write_text("[Desktop Entry]\nExec=/home/u/.local/bin/quickseemd-agent\n")
+    assert autostart.is_ours(p)
+    p.write_text(autostart.entry(["/x/y"]))
+    assert autostart.is_ours(p)
+    p.unlink()
+
+
+def test_terminate_all_does_not_take_the_lock():
+    # 主執行緒握著鎖時呼叫也不能卡住（訊號處理函式的情況）
+    with process._SPAWNED_LOCK:
+        process.terminate_all()
