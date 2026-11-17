@@ -13,6 +13,7 @@ from . import (
     rotate,
     strip_metadata,
     upscale,
+    watermark,
 )
 
 TOOLS: list[ToolDefinition] = [
@@ -21,6 +22,7 @@ TOOLS: list[ToolDefinition] = [
     resize.TOOL,
     crop.TOOL,
     rotate.TOOL,
+    watermark.TOOL,
     blur_faces.TOOL,
     strip_metadata.TOOL,
     upscale.TOOL,
