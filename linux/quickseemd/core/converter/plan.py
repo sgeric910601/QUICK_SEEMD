@@ -57,6 +57,7 @@ def _tools() -> dict[str, bool]:
         "pdftocairo": backends.available("pdftocairo"),
         "pdftotext": backends.available("pdftotext"),
         "bsdtar": backends.available("bsdtar"),
+        "7z": backends.available("7z"),
     }
 
 
@@ -266,8 +267,8 @@ def _archives(pl: _Plan, tools: dict[str, bool]) -> None:
     kind = p.archive_kind
     can_7z = tools["bsdtar"]
     if kind is not None:
-        if kind in NEEDS_BSDTAR and not tools["bsdtar"]:
-            return
+        if kind in NEEDS_BSDTAR and not (tools["bsdtar"] or tools["7z"]):
+            return  # 共用的安全解壓縮要用 bsdtar 或 7z 才讀得懂這些格式
         pl.add("extract", "archive")
         if kind not in ("gzip", "bzip2", "xz"):
             if kind != "zip":

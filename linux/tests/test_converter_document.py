@@ -223,21 +223,38 @@ def test_soffice_lock_is_exclusive(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     import os
     import threading
 
-    from quickseemd.core.converter import office
+    from quickseemd.core import soffice
 
-    monkeypatch.setattr(office, "lock_path", lambda: tmp_path / "soffice.lock")
-    monkeypatch.setattr(office, "LOCK_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(soffice, "lock_path", lambda: tmp_path / "soffice.lock")
+    monkeypatch.setattr(soffice, "LOCK_POLL_SECONDS", 0.01)
     fd = os.open(tmp_path / "soffice.lock", os.O_RDWR | os.O_CREAT)
     fcntl.flock(fd, fcntl.LOCK_EX)
     cancel = threading.Event()
     cancel.set()
-    ctx = ToolContext(tmp_path, None, cancel)
     with pytest.raises(errors.Cancelled):
-        with office.soffice_lock(ctx):
+        with soffice.lock(cancel):
             pass
     os.close(fd)
-    with office.soffice_lock(ToolContext(tmp_path)):
+    with soffice.lock(None):
         pass
+
+
+def test_soffice_profile_blocks_external_links(tmp_path: Path) -> None:
+    from xml.parsers import expat
+
+    from quickseemd.core import soffice
+
+    profile = soffice.make_profile(tmp_path)
+    xcu = (profile / "user" / "registrymodifications.xcu").read_text("utf-8")
+    expat.ParserCreate().Parse(xcu.encode(), True)
+    assert (
+        '<item oor:path="/org.openoffice.Office.Common/Security/Scripting">'
+        '<prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value>'
+    ) in xcu
+    assert '"DisableMacrosExecution"' in xcu
+    args = soffice.arguments(tmp_path / "a.docx", "pdf", tmp_path / "o", profile, None)
+    assert args[1] == f"-env:UserInstallation={profile.resolve().as_uri()}"
+    assert args[-1] == str((tmp_path / "a.docx").resolve())
 
 
 def test_scanned_pdf_to_docx_without_tesseract(
