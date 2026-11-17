@@ -8,6 +8,7 @@ from __future__ import annotations
 from ...model import ToolDefinition
 from .organize import ORGANIZE, ROTATE
 from .pages import DELETE_PAGES, MERGE, SPLIT
+from .security import METADATA, PROTECT, UNLOCK
 from .stamp import PAGE_NUMBERS, WATERMARK
 
 TOOLS: list[ToolDefinition] = [
@@ -18,4 +19,7 @@ TOOLS: list[ToolDefinition] = [
     ROTATE,
     WATERMARK,
     PAGE_NUMBERS,
+    PROTECT,
+    UNLOCK,
+    METADATA,
 ]
