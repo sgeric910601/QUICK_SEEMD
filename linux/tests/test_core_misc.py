@@ -265,3 +265,34 @@ def test_worker_cancel(extra_tools, tmp_path):
     res = job.wait(15)
     assert res is not None and res.get("cancelled") is True
     assert job._proc is not None and job._proc.returncode is not None  # 程序已結束並回收
+
+
+# ------------------------------------------------------------------ 剪貼簿與動態範圍
+
+
+def test_clipboard_travels_in_result(extra_tools, tmp_path):
+    from quickseemd.core.model import ToolContext as Ctx
+
+    ctx = Ctx(None)
+    ctx.segment(0, 2).set_clipboard("內容")
+    assert ctx.clipboard == "內容"
+    res = run_spec(JobSpec("tool", "test.echo", [str(tmp_path)]))
+    assert "clipboard" not in res.to_json()
+    res.clipboard = "A\nB"
+    assert res.to_json()["clipboard"] == "A\nB"
+
+
+def test_option_dynamic_range_and_suggestions():
+    from quickseemd.core.options import Choice, Kind, Option
+
+    opt = Option(
+        "start",
+        Kind.SLIDER,
+        minimum=0,
+        maximum=10,
+        dynamic_range=lambda v, i: (0, i.get("duration", 10) - 0.2),
+    )
+    assert opt.current_range({}, {"duration": 5}) == (0.0, 4.8)
+    plain = Option("x", Kind.TEXT, suggestions=(Choice("25", "25 MB"),))
+    assert plain.current_range({}, {}) == (None, None)
+    assert plain.suggestions[0].value == "25"
