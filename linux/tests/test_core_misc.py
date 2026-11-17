@@ -296,3 +296,33 @@ def test_option_dynamic_range_and_suggestions():
     plain = Option("x", Kind.TEXT, suggestions=(Choice("25", "25 MB"),))
     assert plain.current_range({}, {}) == (None, None)
     assert plain.suggestions[0].value == "25"
+
+
+def test_custom_color_default_and_adjust_hook():
+    from quickseemd.core.model import OTHER, ToolDefinition
+    from quickseemd.core.options import Choice, Kind, Option
+
+    color = Option(
+        "bg",
+        Kind.COLOR,
+        default="#ffffff",
+        custom_key="bg_custom",
+        custom_default="#e3332e",
+        choices=(
+            Choice("#ffffff", "白色"),
+            Choice("transparent", "透明"),
+            Choice("custom", "自訂"),
+        ),
+    )
+    tool = ToolDefinition(
+        "test.adjust",
+        OTHER,
+        "t",
+        "t",
+        "bolt",
+        lambda f, v, c: [],
+        options=(color,),
+        adjust=lambda v, k, i: {"bg_custom": "#000000"} if k == "bg" else {},
+    )
+    assert tool.defaults() == {"bg": "#ffffff", "bg_custom": "#e3332e"}
+    assert tool.adjust({"bg": "custom"}, "bg", {}) == {"bg_custom": "#000000"}

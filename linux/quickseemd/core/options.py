@@ -32,7 +32,9 @@ class Kind(str, Enum):
     PASSWORD = "password"  # 密碼輸入
     NUMBER = "number"  # 整數輸入＋加減按鈕
     PAGE_RANGE = "page_range"  # 頁碼範圍（info["page_count"] 用來顯示說明與檢查）
-    COLOR = "color"  # 色點單選；choice.value 是 "#rrggbb" 或 "custom"（自訂色存在 custom_key）
+    # 色點單選；choice.value 是 "#rrggbb"、"transparent"（透明，畫棋盤格）或 "custom"
+    # （自訂色以 "#rrggbb" 存在 custom_key，預設值是 custom_default）
+    COLOR = "color"
     GRID = "grid"  # 位置選擇格（columns 欄，choices 依列優先排列；值為 None 的格子不能選）
     FILE = "file"  # 選一個檔案（例如浮水印標誌），值是路徑字串
     TIME = "time"  # 時間輸入（「1:05.5」或「65」），值是字串
@@ -64,6 +66,7 @@ class Option:
     display: Callable[[Any], str] | None = None  # 滑桿數值的顯示方式
     columns: int = 3  # GRID 用
     custom_key: str | None = None  # COLOR 選「自訂」時，自訂色存在這個鍵
+    custom_default: Any = None  # 自訂色的預設值（例如 "#e3332e"）
     file_mime: str | None = None  # FILE 可選的檔案類型（例如 "image/*"）
     group: str | None = None  # 段落標題（同一 group 連續的選項畫在同一段）
     group_icon: str | None = None
@@ -105,7 +108,7 @@ def defaults(options: tuple[Option, ...]) -> Values:
             continue
         out[opt.key] = opt.default
         if opt.custom_key:
-            out.setdefault(opt.custom_key, None)
+            out.setdefault(opt.custom_key, opt.custom_default)
     return out
 
 
