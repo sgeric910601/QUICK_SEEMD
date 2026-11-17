@@ -54,8 +54,14 @@ def loading_widget(text: str) -> Gtk.Widget:
     return box
 
 
+def is_x11(display: Gdk.Display) -> bool:
+    return isinstance(display, GdkX11.X11Display)
+
+
 def _trapped(display: Gdk.Display, action: Callable[[], object]) -> object | None:
     """對別人的視窗做 X 操作時攔下錯誤（Nemo 視窗可能已經關了），不讓程式當掉。"""
+    if not is_x11(display):  # 附屬視窗只在 X11 有意義
+        return None
     GdkX11.X11Display.error_trap_push(display)
     try:
         result = action()
@@ -128,7 +134,11 @@ class PreviewWindow(Gtk.Window):
 
     def _present(self) -> None:
         self.show_all()
-        self.present_with_time(GdkX11.x11_get_server_time(self.get_window()))
+        if is_x11(self.get_display()):
+            # 用 X 伺服器的時間，視窗管理員才會讓預覽視窗拿到焦點
+            self.present_with_time(GdkX11.x11_get_server_time(self.get_window()))
+        else:
+            self.present()
 
     def _place(self, size: tuple[int, int]) -> None:
         if self._fullscreen:  # 全螢幕時換檔案就維持全螢幕
