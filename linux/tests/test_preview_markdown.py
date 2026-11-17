@@ -239,3 +239,86 @@ def test_normal_markdown_is_not_degraded() -> None:
     result = markdown.render("# T\n\n" + "一般的 **段落**。\n\n" * 500, None)
     assert result.degraded is False
     assert result.html.count("<strong>") == 500
+
+
+# ------------------------------------------------------------------ 允許清單：SVG 動畫等繞過手法都要失效
+
+INERT_CASES = [
+    '<svg><animate attributeName="href" to="javascript:alert(1)"/><text>t</text></svg>',
+    '<svg><a><set attributeName="href" to="javascript:alert(1)"/><text>t</text></a></svg>',
+    '<svg><animateTransform attributeName="transform"/><animateMotion path="M0 0"/></svg>',
+    '<svg><discard begin="0s"/><handler type="text/ecmascript">alert(1)</handler></svg>',
+    '<svg><listener event="click" handler="#h"/></svg>',
+    '<svg><use href="https://evil.example/x.svg#a"/><use xlink:href="file:///etc/passwd#x"/></svg>',
+    "<svg><foreignObject><script>alert(1)</script><p>inside</p></foreignObject></svg>",
+    '<svg><image href="https://evil.example/x.png"/><image xlink:href="javascript:x"/></svg>',
+    '<form action="javascript:x"><input formaction="javascript:y"><button>b</button></form>',
+    '<a href="javascript:alert(1)" xlink:href="javascript:x">l</a>',
+    '<iframe srcdoc="<script>alert(1)</script>"></iframe>',
+    '<math><maction actiontype="statusline" xlink:href="javascript:x">m</maction></math>',
+]
+
+
+@pytest.mark.parametrize("raw", INERT_CASES)
+def test_allowlist_makes_bypasses_inert(raw: str) -> None:
+    out = sanitize.sanitize_html(raw).lower()
+    for bad in ("javascript:", "attributename", "<animate", "<set", "<discard", "<handler",
+                "<listener", "<use", "<foreignobject", "<script", "<iframe", "srcdoc",
+                "formaction", "<form", "<input", "xlink:href", "evil.example", "file:///",
+                "inside", "alert(1)"):  # fmt: skip
+        assert bad not in out, (bad, out)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ('<p style="color:red">a</p>', '<p style="color:red">a</p>'),
+        ('<p style="background:url(http://evil.example/x.png)">a</p>', "<p>a</p>"),
+        ('<p style="width: expression(alert(1))">a</p>', "<p>a</p>"),
+        ("<p style=\"@import 'x.css'\">a</p>", "<p>a</p>"),
+        ('<p style="background:u\\72l(http://x)">a</p>', "<p>a</p>"),
+        (
+            '<p style="background:url(cid:md-img-1)">a</p>',
+            '<p style="background:url(cid:md-img-1)">a</p>',
+        ),
+        (
+            '<p style="background:url(data:image/png;base64,AA)">a</p>',
+            '<p style="background:url(data:image/png;base64,AA)">a</p>',
+        ),
+        (
+            '<svg viewBox="0 0 10 10"><circle r="1" fill="url(#g)" stroke="url(http://x/y)"/></svg>',
+            '<svg viewbox="0 0 10 10"><circle r="1" fill="url(#g)"/></svg>',
+        ),
+        (
+            '<svg><image href="data:image/png;base64,AA" width="4"/></svg>',
+            '<svg><image href="data:image/png;base64,AA" width="4"/></svg>',
+        ),
+        (
+            '<svg><image xlink:href="cid:md-img-1"/></svg>',
+            '<svg><image xlink:href="cid:md-img-1"/></svg>',
+        ),
+        ("<blink>hi</blink> <marquee>there</marquee>", "hi there"),
+        (
+            '<a href="https://e.com" target="_blank" onclick="x">l</a>',
+            '<a href="https://e.com">l</a>',
+        ),
+        (
+            '<a href="mailto:a@b.c">m</a><a href="#top">t</a>',
+            '<a href="mailto:a@b.c">m</a><a href="#top">t</a>',
+        ),
+        ('<img src="javascript:alert(1)" alt="x">', '<img alt="x">'),
+        (
+            '<table border="1" class="dataframe"><tr style="text-align: right;"><td colspan="2">1</td></tr></table>',
+            '<table border="1" class="dataframe"><tr style="text-align: right;"><td colspan="2">1</td></tr></table>',
+        ),
+        ("<div><style scoped>.x{color:red}</style><b>t</b></div>", "<div><b>t</b></div>"),
+        (
+            "<details open><summary>s</summary>d</details>",
+            "<details open><summary>s</summary>d</details>",
+        ),
+        ("<br/><hr>", "<br/><hr>"),
+        ("</img></br>", ""),
+    ],
+)
+def test_allowlist_keeps_safe_markup(raw: str, expected: str) -> None:
+    assert sanitize.sanitize_html(raw) == expected
