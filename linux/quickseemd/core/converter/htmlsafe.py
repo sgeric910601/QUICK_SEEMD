@@ -5,8 +5,9 @@ LibreOffice 匯入 HTML 時會去抓 <img>、<link>、CSS 的 url(…) 等資源
 1. 判斷編碼（BOM → <meta charset> → 自動偵測）並轉成 UTF-8；含 NUL 字元的直接拒絕。
 2. 用 html.parser 逐一讀出標籤與文字，再重新輸出（屬性值重新跳脫），不靠正規表示式切標籤。
 3. 會載入資源的寫法：
-   - data: 網址照留；網址、//、絕對路徑、反斜線開頭的一律封鎖；
-   - 相對路徑用 realpath 解析，必須是基準資料夾裡的圖片檔（大小有上限），換成 data: 內嵌；
+   - data: 網址只留點陣圖（PNG、JPEG、GIF、WebP、BMP），SVG 與其他類型一律封鎖；
+   - 網址、//、絕對路徑、反斜線開頭的一律封鎖；
+   - 相對路徑用 realpath 解析，必須是基準資料夾裡的點陣圖檔（大小有上限），換成 data: 內嵌；
    - <link>、<base>、<script>、自動跳轉的 <meta>、註解、處理指令直接拿掉；on… 事件屬性拿掉；
    - <style> 與 style 屬性：@import 拿掉、url(…) 依上面規則處理；含 CSS 跳脫字元（\\）的整段丟棄。
 """
@@ -28,6 +29,9 @@ from .. import errors
 from . import textcodec
 
 MAX_INLINE_BYTES = 20 * 1024 * 1024
+# 只允許點陣圖：SVG 本身又能用 <image href="file://…"> 讀取別的檔案，一律不收
+RASTER_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"})
+_DATA_URI = re.compile(r"(?i)^data:([a-z0-9.+-]+/[a-z0-9.+-]+)[;,]")
 URL_ATTRS = frozenset(
     {"src", "data", "poster", "background", "dynsrc", "lowsrc", "codebase", "archive"}
     | {"xlink:href", "longdesc", "usemap", "profile", "manifest", "icon", "formaction", "action"}
@@ -103,10 +107,10 @@ class Resolver:
             st = os.stat(real)
         except OSError:
             return None
-        mime = mimetypes.guess_type(real)[0] or ""
+        mime = (mimetypes.guess_type(real)[0] or "").lower()
         if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_INLINE_BYTES:
             return None
-        if not mime.startswith("image/"):
+        if mime not in RASTER_TYPES:
             return None
         with open(real, "rb") as fh:
             return f"data:{mime};base64,{base64.b64encode(fh.read()).decode('ascii')}"
@@ -115,7 +119,8 @@ class Resolver:
         """屬性值或 url() 的內容 → 安全的網址；None＝封鎖。"""
         value = _INVISIBLE.sub("", raw)
         if value.lower().startswith("data:"):
-            return value
+            m = _DATA_URI.match(value)
+            return value if m and m.group(1).lower() in RASTER_TYPES else None
         if not value or _SCHEME.match(value) or value.startswith(("/", "\\")):
             return None
         return self._inline(value)
