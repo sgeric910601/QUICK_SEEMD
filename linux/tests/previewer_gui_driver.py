@@ -113,6 +113,19 @@ class Desktop:
             "title": self._title(win),
         }
 
+    def popups(self) -> list[dict]:
+        """畫面上的彈出選單（override-redirect 視窗），由大到小。"""
+        found = []
+        for win in self.root.query_tree().children:
+            try:
+                attrs = win.get_attributes()
+                geo = win.get_geometry()
+            except Exception:  # noqa: BLE001 — 選單可能剛好關掉
+                continue
+            if attrs.override_redirect and attrs.map_state == X.IsViewable and geo.width > 50:
+                found.append({"x": geo.x, "y": geo.y, "width": geo.width, "height": geo.height})
+        return sorted(found, key=lambda r: r["width"] * r["height"], reverse=True)
+
     def screenshot(self, name: str) -> str:
         root = Gdk.get_default_root_window()
         pb = Gdk.pixbuf_get_from_window(root, 0, 0, root.get_width(), root.get_height())
@@ -377,10 +390,18 @@ def run_preview(cfg: dict, d: Desktop) -> dict:
 # ------------------------------------------------------------------ Nemo 的情境
 
 
-def ocr_find(png: str, word: str) -> tuple[int, int] | None:
-    """用 tesseract 找出畫面上某個字的中心點。"""
+def ocr_find(png: str, rect: dict, word: str) -> tuple[int, int] | None:
+    """在畫面的某個範圍裡（放大兩倍後）用 tesseract 找某個字，回傳它在畫面上的中心點。"""
+    from PIL import Image  # noqa: PLC0415
+
+    scale = 2
+    crop = Path(png).with_name(Path(png).stem + "-crop.png")
+    with Image.open(png) as img:
+        box = (rect["x"], rect["y"], rect["x"] + rect["width"], rect["y"] + rect["height"])
+        part = img.convert("RGB").crop(box)
+        part.resize((part.width * scale, part.height * scale), Image.LANCZOS).save(crop)
     res = subprocess.run(
-        ["/usr/bin/tesseract", png, "stdout", "-l", "eng", "tsv"],
+        ["/usr/bin/tesseract", str(crop), "stdout", "-l", "eng", "tsv"],
         capture_output=True,
         text=True,
         check=False,
@@ -389,7 +410,10 @@ def ocr_find(png: str, word: str) -> tuple[int, int] | None:
         cols = line.split("\t")
         if len(cols) == 12 and word in cols[11].upper():
             left, top, width, height = (int(v) for v in cols[6:10])
-            return left + width // 2, top + height // 2
+            return (
+                rect["x"] + (left + width // 2) // scale,
+                rect["y"] + (top + height // 2) // scale,
+            )
     return None
 
 
@@ -432,7 +456,11 @@ def nemo_menu_steps(d: Desktop, cfg: dict) -> dict:
     d.pump(1.5)
     shot = d.screenshot("nemo-menu")
     r["menu_shot"] = shot
-    spot = ocr_find(shot, "SEEMD") or ocr_find(shot, "QUICK")
+    menus = d.popups()
+    r["popups"] = menus
+    if not menus:
+        return r
+    spot = ocr_find(shot, menus[0], "SEEMD") or ocr_find(shot, menus[0], "QUICK")
     r["menu_item_found"] = spot is not None
     if spot is None:
         return r
