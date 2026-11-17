@@ -270,3 +270,103 @@ def test_font_specimen_without_family(tmp_path: Path, monkeypatch: pytest.Monkey
     f.write_bytes(b"OTTO" + b"\x00" * 64)
     html = preview.render_font(f).html
     assert "&lt;b&gt;Odd" in html and "<b>Odd" not in html
+
+
+# ------------------------------------------------------------------ 惡意文字：每種頁面都要跳脫
+
+EVIL = "<img src=x onerror=alert(1)><script>alert(2)</script>"
+EVIL_NAME = "<img src=x onerror=alert(1)>"
+
+
+def _hostile_files(tmp_path: Path) -> dict[str, Path]:
+    import gzip
+    import io
+    import json
+    import lzma
+    import plistlib
+    import sqlite3
+    import tarfile
+    import zipfile
+
+    files: dict[str, Path] = {}
+
+    def add(key: str, name: str, data: bytes) -> None:
+        p = tmp_path / key
+        p.mkdir()
+        (p / name).write_bytes(data)
+        files[key] = p / name
+
+    add("code", f"{EVIL_NAME}.py", f"x = '{EVIL}'\n".encode())
+    add("text", f"{EVIL_NAME}.txt", EVIL.encode())
+    add("csv", "t.csv", f"{EVIL},b\n{EVIL},2\n".encode())
+    add("json", "t.json", json.dumps({EVIL: [EVIL] * 30}).encode())
+    add(
+        "md", "t.md", f"# {EVIL}\n\n[{EVIL}](javascript:x) ![{EVIL}](nope.png)\n\n{EVIL}\n".encode()
+    )
+    nb = {"cells": [
+        {"cell_type": "markdown", "source": EVIL},
+        {"cell_type": "code", "execution_count": EVIL, "source": EVIL, "outputs": [
+            {"output_type": "stream", "name": "stdout", "text": EVIL},
+            {"output_type": "error", "ename": EVIL, "evalue": EVIL, "traceback": []},
+            {"output_type": "display_data", "data": {"text/html": EVIL, "image/svg+xml": EVIL}},
+        ]},
+        {"cell_type": EVIL, "source": EVIL},
+    ], "metadata": {"kernelspec": {"language": EVIL}}}  # fmt: skip
+    add("nb", "t.ipynb", json.dumps(nb).encode())
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w") as z:
+        z.writestr(f"{EVIL_NAME}/{EVIL_NAME}.txt", EVIL)
+        z.comment = EVIL.encode()
+    add("zip", "t.zip", zbuf.getvalue())
+    tbuf = io.BytesIO()
+    with tarfile.open(fileobj=tbuf, mode="w") as tf:
+        info = tarfile.TarInfo(f"{EVIL_NAME}.txt")
+        info.size = len(EVIL)
+        tf.addfile(info, io.BytesIO(EVIL.encode()))
+    add("tar", "t.tar", tbuf.getvalue())
+    add("targz", "t.tar.gz", gzip.compress(tbuf.getvalue()))
+    gbuf = io.BytesIO()
+    with gzip.GzipFile(filename=EVIL_NAME, mode="wb", fileobj=gbuf) as gz:
+        gz.write(EVIL.encode())
+    add("gz", "t.gz", gbuf.getvalue())
+    add("xz", f"{EVIL_NAME}.html.xz", lzma.compress(EVIL.encode()))
+    add("bin", f"{EVIL_NAME}.bin", b"\x00\x01" + EVIL.encode())
+    add("plist", "t.plist", plistlib.dumps({EVIL: EVIL}, fmt=plistlib.FMT_BINARY))
+    add(
+        "font",
+        f"{EVIL_NAME}.ttf",
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf").read_bytes(),
+    )
+    dbdir = tmp_path / "db"
+    dbdir.mkdir()
+    db = dbdir / "t.sqlite"
+    con = sqlite3.connect(db)
+    con.execute(f'CREATE TABLE "{EVIL}"("{EVIL}" TEXT)')
+    con.execute(f'INSERT INTO "{EVIL}" VALUES (?)', (EVIL,))
+    con.commit()
+    con.close()
+    files["sqlite"] = db
+    folder = tmp_path / "folder" / EVIL_NAME
+    folder.mkdir(parents=True)
+    files["folder"] = folder
+    fifo = tmp_path / "fifo"
+    fifo.mkdir()
+    os.mkfifo(fifo / EVIL_NAME)
+    files["special"] = fifo / EVIL_NAME
+    return files
+
+
+def _assert_safe(html: str) -> None:
+    lowered = html.lower()
+    assert "<script" not in lowered
+    assert "<img src=x" not in lowered
+    for tag in re.findall(r"<[a-z][^>]*>", lowered):  # 只看真正的標籤
+        assert "onerror" not in tag and "javascript:" not in tag, tag
+
+
+def test_hostile_text_in_every_page_type(tmp_path: Path) -> None:
+    files = _hostile_files(tmp_path)
+    for key, path in files.items():
+        doc = preview.render_font(path) if key == "font" else preview.render(path)
+        _assert_safe(doc.html)
+        assert doc.html.startswith(SKELETON), key

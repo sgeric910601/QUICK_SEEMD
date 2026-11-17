@@ -374,3 +374,31 @@ def test_sqlite_wide_tables_and_cell_budget(
     page = sqliteview.render(FileInfo.of(db))
     assert "（內容太多，已略過）" in page.body
     assert [n.text for n in page.notices] == ["內容太多，部分資料表沒有載入資料"]
+
+
+def test_sqlite_random_typed_view_cannot_inject_html(tmp_path: Path) -> None:
+    db = tmp_path / "evil.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE n(i)")
+    con.executemany("INSERT INTO n VALUES (?)", [(i,) for i in range(100)])
+    con.execute(
+        "CREATE VIEW v AS SELECT CASE WHEN random() % 2 THEN 1 "
+        "ELSE '<img src=x onerror=alert(1)>' END AS a, "
+        "CASE WHEN random() % 2 THEN 2.5 ELSE '<script>x()</script>' END AS b FROM n"
+    )
+    con.commit()
+    con.close()
+    for _ in range(3):
+        body = sqliteview.render(FileInfo.of(db)).body
+        assert "<img" not in body and "<script" not in body
+        assert "&lt;img src=x onerror=alert(1)&gt;" in body
+
+
+def test_sqlite_cell_html_escapes_every_type() -> None:
+    assert sqliteview.cell_html(None) == '<td class="null">NULL</td>'
+    assert sqliteview.cell_html(7) == '<td class="num">7</td>'
+    assert sqliteview.cell_html(True) == '<td class="num">1</td>'
+    assert sqliteview.cell_html(0.5) == '<td class="num">0.5</td>'
+    assert sqliteview.cell_html(b"\x00" * 2048) == '<td class="null">BLOB · 2 KB</td>'
+    assert sqliteview.cell_html("<b>") == "<td>&lt;b&gt;</td>"
+    assert sqliteview._cell_value("<img src=x>") == "<td>&lt;img src=x&gt;</td>"

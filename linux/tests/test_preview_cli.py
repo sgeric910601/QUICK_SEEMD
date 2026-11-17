@@ -50,7 +50,7 @@ def test_spaces_and_no_overwrite(tmp_path: Path, capsys: pytest.CaptureFixture[s
     assert keep.read_text("utf-8") == "keep"
     new = out / "my_file.txt_(1).html"
     assert new.exists()
-    assert "my_file.txt_(1).file-icon." in new.read_text("utf-8")
+    assert "my_file.txt_%281%29.file-icon." in new.read_text("utf-8")  # 屬性裡的檔名經網址編碼
     assert LINE.match(capsys.readouterr().out.strip()).group(1) == "my_file.txt_(1).html"
 
 
@@ -78,3 +78,13 @@ def test_through_main_cli(
 def test_missing_input_still_renders(tmp_path: Path) -> None:
     assert cli.main([str(tmp_path / "nope.txt"), str(tmp_path / "o")]) == 0
     assert "找不到檔案" in (tmp_path / "o" / "nope.txt.html").read_text("utf-8")
+
+
+def test_output_names_cannot_break_out_of_attributes(tmp_path: Path) -> None:
+    src = tmp_path / 'a" onerror="alert(1).txt'
+    src.write_text("x\n", "utf-8")
+    out = tmp_path / "out"
+    assert cli.main([str(src), str(out)]) == 0
+    html = next(out.glob("*.html")).read_text("utf-8")
+    assert 'onerror="alert(1)' not in html
+    assert "a%22_onerror%3D%22alert%281%29.txt.file-icon." in html

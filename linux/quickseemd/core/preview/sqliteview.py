@@ -3,8 +3,9 @@
 以唯讀＋immutable 開啟（不會改動檔案，也不會產生 -wal／-journal）。
 Linux 版補充（惡意或超大的資料庫不能拖垮預覽，所有上限都在查詢裡套用）：
 - 整頁的查詢有時間上限（惡意的檢視可能跑不完），超過就中止剩下的查詢。
-- 文字只取前 301 個字、BLOB 只取長度（在 SQLite 裡截斷，不會把整個大值讀進來）；
-  單一值超過 MAX_VALUE_BYTES 時 SQLite 直接回報錯誤。
+- 每個欄位只讀一次（quickseemd_cell()），在 Python 依實際的值判斷型別、截斷、跳脫；
+  檢視裡的 random() 之類運算不會讓型別標籤和值對不上。單一值超過 MAX_VALUE_BYTES 時
+  SQLite 直接回報錯誤，所以一次最多只有一個不超過上限的值在記憶體裡。
 - 每張表最多顯示 MAX_COLUMNS 欄；整頁最多 MAX_CELLS 個儲存格，之後的表格不載入資料。
 - 物件清單最多 MAX_OBJECTS 個，名稱過長的物件略過；結構定義最多 MAX_SCHEMA_CHARS 字。
 """
@@ -47,6 +48,7 @@ def _connect(path: Path) -> sqlite3.Connection:
     con = sqlite3.connect(uri, uri=True)
     con.text_factory = lambda b: b.decode("utf-8", "replace")
     con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
+    con.create_function(CELL_FUNCTION, 1, cell_html)
     deadline = time.monotonic() + QUERY_BUDGET_SECONDS
     con.set_progress_handler(lambda: int(time.monotonic() > deadline), _PROGRESS_STEPS)
     return con
@@ -68,29 +70,33 @@ def quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _select_list(columns: list[str]) -> str:
-    """每欄取（型別, 截斷後的值）：文字取前 301 字、BLOB 只取長度。"""
-    parts = []
-    for col in columns:
-        q = quote_ident(col)
-        parts.append(
-            f"typeof({q}), CASE typeof({q}) WHEN 'text' THEN substr({q}, 1, {TEXT_LIMIT + 1}) "
-            f"WHEN 'blob' THEN length({q}) ELSE {q} END"
-        )
-    return ", ".join(parts)
+CELL_FUNCTION = "quickseemd_cell"
 
 
-def _cell(kind: str, v: object) -> str:
-    if kind == "null" or v is None:
+def cell_html(v: object) -> str:
+    """一個值 → 儲存格 HTML。型別一律看 Python 拿到的實際值（不信任任何標籤），每種都跳脫。"""
+    if v is None:
         return '<td class="null">NULL</td>'
-    if kind == "integer":
-        return f'<td class="num">{v}</td>'
-    if kind == "real":
-        return f'<td class="num">{float(v)!r}</td>'  # type: ignore[arg-type]
-    if kind == "blob":
-        return f'<td class="null">BLOB · {fmt.bytes_label(int(v))}</td>'  # type: ignore[call-overload]
+    if isinstance(v, bool | int):
+        return f'<td class="num">{escape(str(int(v)))}</td>'
+    if isinstance(v, float):
+        return f'<td class="num">{escape(repr(v))}</td>'
+    if isinstance(v, bytes | bytearray | memoryview):
+        return f'<td class="null">BLOB · {escape(fmt.bytes_label(len(v)))}</td>'
     s = str(v)
     return f"<td>{escape(s[:TEXT_LIMIT] + '…' if len(s) > TEXT_LIMIT else s)}</td>"
+
+
+def _select_list(columns: list[str]) -> str:
+    """每欄只讀一次：交給 quickseemd_cell() 在 Python 裡判斷型別、截斷並跳脫。"""
+    return ", ".join(f"{CELL_FUNCTION}({quote_ident(col)})" for col in columns)
+
+
+def _cell_value(html: object) -> str:
+    """quickseemd_cell() 的結果一定是我們產生的 <td>；萬一不是（不該發生）就整段跳脫。"""
+    if isinstance(html, str) and html.startswith("<td"):
+        return html
+    return f"<td>{escape(str(html))}</td>"
 
 
 class _Renderer:
@@ -114,7 +120,7 @@ class _Renderer:
         self.cells_left -= len(rows) * len(shown)
         out = []
         for n, row in enumerate(rows, start=1):
-            cells = "".join(_cell(str(row[k]), row[k + 1]) for k in range(0, len(row), 2))
+            cells = "".join(_cell_value(v) for v in row)
             out.append(f'<tr><td class="rn">{n}</td>{cells}</tr>')
         if not out:
             out.append(
@@ -125,7 +131,7 @@ class _Renderer:
     def object_html(self, index: int, kind: str, name: str, sql: str) -> str:
         q = quote_ident(name)
         counted = _query(self.con, f"SELECT COUNT(*) FROM {q}")
-        count = int(counted[0][0]) if counted else -1
+        count = counted[0][0] if counted and isinstance(counted[0][0], int) else -1
         columns = self.columns(q)
         shown = columns[:MAX_COLUMNS]
         label = "檢視" if kind == "view" else "資料表"

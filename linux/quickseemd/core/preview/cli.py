@@ -14,6 +14,7 @@ import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import quote
 
 from . import Document, engine
 
@@ -48,6 +49,12 @@ def _plan(doc: Document, base: str) -> tuple[str, dict[str, str]]:
     return f"{base}.html", names
 
 
+def _reference(m: re.Match[str], att_names: dict[str, str]) -> str:
+    """cid:名稱 → 網址編碼後的附件檔名；不認得的引用保持原樣。"""
+    name = att_names.get(m.group(1))
+    return quote(name, safe="") if name is not None else m.group(0)
+
+
 def _write_new(path: Path, data: bytes) -> None:
     with open(path, "xb") as fh:  # 獨佔建立：已存在就丟 FileExistsError，絕不覆蓋
         fh.write(data)
@@ -61,7 +68,8 @@ def write_document(doc: Document, out_dir: Path, base: str) -> tuple[Path, str]:
         targets = [out_dir / html_name] + [out_dir / n for n in att_names.values()]
         if any(t.exists() or t.is_symlink() for t in targets):
             continue
-        html = _CID.sub(lambda m: att_names.get(m.group(1), m.group(0)), doc.html)
+        # 檔名來自使用者的檔案，可能含引號等字元：以網址編碼放進屬性，不能跳出 src="…"
+        html = _CID.sub(lambda m: _reference(m, att_names), doc.html)
         try:
             for name, att in doc.attachments.items():
                 _write_new(out_dir / att_names[name], att.data)

@@ -73,7 +73,9 @@ class BlockRenderer:
             self.out.append(f"<{tok.tag}>")
         elif t == "ordered_list_open":
             start = tok.attrGet("start")
-            self.out.append(f'<ol start="{start}">' if start not in (None, 1) else "<ol>")
+            self.out.append(
+                f'<ol start="{escape(str(start))}">' if start not in (None, 1) else "<ol>"
+            )
         elif t == "thead_open":
             self.in_thead = True
         elif t == "tr_open":
