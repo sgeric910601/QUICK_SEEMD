@@ -164,8 +164,8 @@ def test_encode_big5_and_gb18030():
 
 def test_encode_unencodable_reports_first_character():
     with pytest.raises(errors.QSError) as exc:
-        tc.encode("繁體与简体", tc.BIG5, bom=False)
-    assert str(exc.value) == "有些字元無法用 Big5 表示（例如「与」），建議改用 UTF-8。"
+        tc.encode("繁體这是简体", tc.BIG5, bom=False)
+    assert str(exc.value) == "有些字元無法用 Big5 表示（例如「这」），建議改用 UTF-8。"
 
 
 @pytest.mark.parametrize(

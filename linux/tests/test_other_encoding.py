@@ -159,10 +159,10 @@ def test_target_equal_to_current_is_refused(tmp_path, data, target, label):
 
 
 def test_unencodable_character(tmp_path, outdir):
-    src = _write(tmp_path / "a.txt", "繁體与简体\n".encode())
+    src = _write(tmp_path / "a.txt", "繁體这是简体\n".encode())
     with pytest.raises(errors.QSError) as exc:
         _run([src], "big5", outdir)
-    assert str(exc.value) == "有些字元無法用 Big5 表示（例如「与」），建議改用 UTF-8。"
+    assert str(exc.value) == "有些字元無法用 Big5 表示（例如「这」），建議改用 UTF-8。"
     assert list(outdir.iterdir()) == []
 
 
