@@ -67,18 +67,29 @@ class TrimView:
         threading.Thread(target=self._load, args=(path, self._token), daemon=True).start()
 
     def _load(self, path: Path, token: int) -> None:
-        info = mp.probe(path)
+        """背景執行緒：讀長度，再做縮圖帶或波形；任何錯誤都要回報（不能卡在讀取中）。"""
+        try:
+            info = mp.probe(path)
+        except Exception:  # noqa: BLE001
+            LOG.exception("讀取影音資訊失敗：%s", path)
+            info = None
         to_main(self._probed, token, info)
         if info is None:
             return
+        try:
+            self._load_media(path, token, info)
+        except Exception:  # noqa: BLE001 — 縮圖帶或波形做不出來時仍可剪輯
+            LOG.exception("產生縮圖帶或波形失敗：%s", path)
+            to_main(self._media_ready, token, [], [])
+
+    def _load_media(self, path: Path, token: int, info: mp.MediaInfo) -> None:
         if self.is_audio or not info.has_video:
-            wave = mp.peaks(path)
-            to_main(self._media_ready, token, [], wave)
-        else:
-            poster = video_frame(path, min(1.0, info.duration / 2), 360)
-            to_main(self._poster_ready, token, poster)
-            frames = [mp.png_surface(d) for d in mp.strip(path, info.duration)]
-            to_main(self._media_ready, token, frames, [])
+            to_main(self._media_ready, token, [], mp.peaks(path))
+            return
+        poster = video_frame(path, min(1.0, info.duration / 2), 360)
+        to_main(self._poster_ready, token, poster)
+        frames = [mp.png_surface(d) for d in mp.strip(path, info.duration)]
+        to_main(self._media_ready, token, frames, [])
 
     def _probed(self, token: int, info: mp.MediaInfo | None) -> bool:
         if token != self._token:

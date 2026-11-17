@@ -18,7 +18,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, GLib, GObject, Gtk  # noqa: E402
 
 from ..mainloop import to_main  # noqa: E402
-from ..thumbnails import render_pdf_page  # noqa: E402
+from .. import thumbnails  # noqa: E402
 from ..widgets import clear, hbox, icon, label, secondary, vbox  # noqa: E402
 from . import ViewContext  # noqa: E402
 from . import organize_model as om  # noqa: E402
@@ -28,18 +28,6 @@ BOX = (132, 150)
 THUMB_SIDE = 260
 DRAG_PREFIX = "qs-page:"
 NOTE = "拖曳縮圖可以調整順序；把滑鼠移到頁面上可旋轉、刪除或在後面插入空白頁。按住 Ctrl 或 Shift 點選可一次選取多頁。"
-
-
-def _read_pdf(path: Path) -> list[tuple[float, float]]:
-    gi.require_version("Poppler", "0.18")
-    from gi.repository import Poppler  # noqa: PLC0415
-
-    try:
-        doc = Poppler.Document.new_from_file(path.as_uri(), None)
-    except GLib.Error as exc:
-        LOG.info("讀不到 PDF：%s", exc.message)
-        return []
-    return [tuple(doc.get_page(i).get_size()) for i in range(doc.get_n_pages())]
 
 
 class OrganizeView:
@@ -67,15 +55,32 @@ class OrganizeView:
         threading.Thread(target=self._load, args=(path, self._token), daemon=True).start()
 
     def _load(self, path: Path, token: int) -> None:
-        sizes = _read_pdf(path)
+        """背景執行緒：整份 PDF 只開一次，先送回各頁尺寸，再逐頁畫縮圖。任何錯誤都要回報。"""
+        doc, sizes = None, []
+        try:
+            doc = thumbnails.open_pdf(path)
+            if doc is not None:
+                sizes = [tuple(doc.get_page(i).get_size()) for i in range(doc.get_n_pages())]
+        except Exception:  # noqa: BLE001 — 讀不到就顯示「無法讀取這份 PDF 的頁面」
+            LOG.exception("讀取 PDF 失敗：%s", path)
+            doc, sizes = None, []
         to_main(self._loaded, token, sizes)
-        for i in range(len(sizes)):
-            if token != self._token:
-                return
-            data = render_pdf_page(path, i, THUMB_SIDE)
-            if data:
-                surf = cairo.ImageSurface.create_from_png(io.BytesIO(data))
-                to_main(self._thumb_ready, token, i, surf)
+        if doc is None:
+            return
+        try:
+            for i in range(len(sizes)):
+                if token != self._token:
+                    return
+                data = thumbnails.render_page(doc, i, THUMB_SIDE)
+                if data:
+                    to_main(
+                        self._thumb_ready,
+                        token,
+                        i,
+                        cairo.ImageSurface.create_from_png(io.BytesIO(data)),
+                    )
+        except Exception:  # noqa: BLE001 — 縮圖畫不出來時頁面仍可整理
+            LOG.exception("產生頁面縮圖失敗：%s", path)
 
     def _loaded(self, token: int, sizes: list[tuple[float, float]]) -> bool:
         if token == self._token:

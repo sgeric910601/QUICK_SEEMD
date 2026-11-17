@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from ...core import backends, naming, process
-from ..thumbnails import video_frame
+from ..thumbnails import ffmpeg_input, video_frame
 from .trim_model import compute_peaks, strip_times
 
 LOG = logging.getLogger(__name__)
@@ -23,6 +23,7 @@ WAVE_RATE = 4000
 PEAK_COUNT = 280
 STRIP_COUNT = 12
 STRIP_HEIGHT = 64
+PROBE_ENTRIES = "format=duration:stream=codec_type,codec_name,width,height"
 
 
 @dataclass(frozen=True)
@@ -49,14 +50,9 @@ def probe(path: Path) -> MediaInfo | None:
     ffprobe = backends.find("ffprobe")
     if ffprobe is None:
         return None
-    args = [
-        ffprobe,
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration:stream=codec_type,codec_name,width,height",
-    ]
-    args += ["-of", "json", str(Path(path).resolve())]
+    # ffprobe 沒有 -nostdin（它不讀標準輸入，process.run 也把標準輸入接到 /dev/null）
+    args = [ffprobe, "-v", "error", "-show_entries", PROBE_ENTRIES, "-of", "json"]
+    args += ffmpeg_input(path)
     try:
         res = process.run(args, timeout=PROBE_TIMEOUT)
         data = json.loads(res.stdout or "{}")
@@ -91,13 +87,13 @@ def peaks(path: Path) -> list[float]:
     ffmpeg = backends.find("ffmpeg")
     if ffmpeg is None:
         return []
-    cache = backends.cache_dir()
+    cache = backends.cache_dir().resolve()
     cache.mkdir(parents=True, exist_ok=True)
     work = naming.make_work_dir(cache)
     try:
         out = work / "wave.raw"
         args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n"]
-        args += ["-i", str(Path(path).resolve()), "-ac", "1", "-ar", str(WAVE_RATE)]
+        args += [*ffmpeg_input(path), "-ac", "1", "-ar", str(WAVE_RATE)]
         args += ["-f", "s16le", str(out)]
         res = process.run(args, timeout=120)
         if res.returncode != 0 or not out.is_file():

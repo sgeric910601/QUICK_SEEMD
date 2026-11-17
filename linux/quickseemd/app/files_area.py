@@ -104,6 +104,7 @@ class FilesArea(Gtk.Box):
         self._on_change = on_change
         self._on_pick = on_pick
         self.files: list[Path] = []
+        self.custom_active = False
         self._build_header()
         self.stack = Gtk.Stack(vexpand=True)
         self.grid = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True)
@@ -155,14 +156,18 @@ class FilesArea(Gtk.Box):
     # ------------------------------------------------------------ 內容
 
     def set_custom(self, widget: Gtk.Widget | None) -> None:
+        """自訂畫面取代縮圖格；啟用時不建立看不到的卡片（省掉縮圖與 PDF 解析）。"""
         old = self.stack.get_child_by_name("custom")
         if old is not None:
             self.stack.remove(old)
+        self.custom_active = widget is not None
         if widget is not None:
             self.stack.add_named(widget, "custom")
             self.stack.set_visible_child_name("custom")
+            self.grid.remove_all()
         else:
             self.stack.set_visible_child_name("grid")
+            self._rebuild(self.tool.reorderable and len(self.files) > 1)
 
     def set_files(self, files: Sequence[Path]) -> None:
         self.files = list(files)
@@ -178,6 +183,8 @@ class FilesArea(Gtk.Box):
 
     def _rebuild(self, reorder: bool) -> None:
         self.grid.remove_all()
+        if self.custom_active:
+            return
         for i, p in enumerate(self.files):
             card = FileCard(p, i + 1 if reorder else None, lambda p=p: self._remove(p))
             if reorder:
