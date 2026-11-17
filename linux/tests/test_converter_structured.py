@@ -406,3 +406,11 @@ def test_json_quote_escapes_invisible_characters() -> None:
     assert (
         structured.quote("a\x85\N{ZERO WIDTH NO-BREAK SPACE}\ud800") == '"a\\u0085\\ufeff\\ud800"'
     )
+
+
+def test_xml_plist_node_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(plistdata, "MAX_XML_NODES", 10)
+    xml = plistdata.xml_plist(tuple(Num(str(i)) for i in range(50))).encode()
+    with pytest.raises(errors.QSError) as exc:
+        plistdata.read_plist(xml)
+    assert str(exc.value) == "資料格式不正確：plist 檔案太大，無法轉換。"

@@ -357,3 +357,74 @@ def test_html_table_escapes_markup() -> None:
     page = tables.html_tables([Table("<s>", (("<script>",), ("a&b",)))], "<t>")
     assert "<script>" not in page
     assert "&lt;script&gt;" in page and "a&amp;b" in page
+
+
+# ------------------------------------------------------------------ 安全：大小上限
+
+
+def _one_cell_sheet(ref_attr: str, row_attr: str = "1") -> str:
+    return (
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+        f'<row r="{row_attr}"><c r="{ref_attr}" t="inlineStr"><is><t>x</t></is></c></row>'
+        "</sheetData></worksheet>"
+    )
+
+
+def test_xlsx_far_cell_fails_fast(tmp_path: Path) -> None:
+    import time
+
+    path = _workbook(tmp_path, _one_cell_sheet("XFD1048576", "1048576"))
+    started = time.monotonic()
+    with pytest.raises(errors.QSError) as exc:
+        xlsx.read_xlsx(path)
+    assert time.monotonic() - started < 2
+    assert "儲存格" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("ref", "row"),
+    [("XFE1", "1"), ("A1", "1048577"), ("A1", "99999999999999999999")],
+)
+def test_xlsx_coordinates_beyond_excel_limits(tmp_path: Path, ref: str, row: str) -> None:
+    with pytest.raises(errors.QSError) as exc:
+        xlsx.read_xlsx(_workbook(tmp_path, _one_cell_sheet(ref, row)))
+    assert "超出 Excel 的範圍" in str(exc.value)
+
+
+def test_xlsx_non_ascii_digits_are_ignored(tmp_path: Path) -> None:
+    # 全形數字不是合法的列號：當成沒有 r 屬性（接在上一列後面）
+    t = xlsx.read_xlsx(_workbook(tmp_path, _one_cell_sheet("A1", "１２")))[0]
+    assert t.rows == (("x",),)
+
+
+def test_xlsx_part_size_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(xlsx, "MAX_PART_BYTES", 100)
+    path = _workbook(tmp_path, _one_cell_sheet("A1") + " " * 500)
+    with pytest.raises(errors.QSError) as exc:
+        xlsx.read_xlsx(path)
+    assert "過大" in str(exc.value)
+
+
+def test_xlsx_sheet_count_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(xlsx, "MAX_SHEETS", 2)
+    out = tmp_path / "many.xlsx"
+    xlsx.write_xlsx([Table(f"s{i}", (("a",),)) for i in range(3)], out)
+    with pytest.raises(errors.QSError) as exc:
+        xlsx.read_xlsx(out)
+    assert "工作表太多" in str(exc.value)
+
+
+def test_xlsx_traversal_part_names_are_refused(tmp_path: Path) -> None:
+    path = tmp_path / "trav.xlsx"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(
+            "xl/workbook.xml",
+            '<workbook xmlns:r="r"><sheets><sheet name="S" r:id="rId1"/></sheets></workbook>',
+        )
+        z.writestr(
+            "xl/_rels/workbook.xml.rels",
+            '<Relationships><Relationship Id="rId1" Target="../../evil.xml"/></Relationships>',
+        )
+        z.writestr("../evil.xml", _one_cell_sheet("A1"))
+    with pytest.raises(errors.QSError):
+        xlsx.read_xlsx(path)

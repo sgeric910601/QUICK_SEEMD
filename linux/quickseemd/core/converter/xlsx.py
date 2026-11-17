@@ -1,7 +1,8 @@
-"""手工產生與讀取 XLSX（對應原版 CVDataConverter 的 writeXLSX／readXLSX）。
+"""讀取 XLSX（對應原版 CVDataConverter.readXLSX）；寫入在 xlsxwrite.py。
 
-寫入：第一列粗體並凍結、欄寬自動、看起來是數字的儲存格存成數值、文字用共用字串表。
-讀取：依活頁簿關聯找工作表、共用字串含 rich text（略過注音 rPh）、偵測日期格式。
+依活頁簿關聯找工作表、共用字串含 rich text（略過注音 rPh）、偵測日期格式。
+工作表與共用字串用串流方式解析（不建整棵樹），並設下各種上限，避免惡意檔案拖垮程式：
+座標不能超出 Excel 範圍、展開後的儲存格總數、共用字串數、工作表數、每個零件解壓後的大小。
 """
 
 from __future__ import annotations
@@ -10,231 +11,56 @@ import math
 import posixpath
 import re
 import zipfile
-from collections.abc import Callable, Sequence
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
+from xml.parsers import expat
 
 from .. import errors
 from . import xmldom
 from .structured import swift_double
-from .tables import Table, looks_numeric
+from .tables import Table
+from .xlsxwrite import column_name, sheet_names, write_xlsx  # noqa: F401 — 對外一併提供
 
-MAX_PART_BYTES = 1024 * 1024 * 1024  # 單一 XML 零件解壓後的上限（防止壓縮炸彈）
-WIDTH_SCAN_ROWS = 2000
-_SHEET_NAME_BAD = re.compile(r"[\\/?*\[\]:]")
-_NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-_NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-_NS_PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
-_XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-_CT = "application/vnd.openxmlformats-officedocument"
-
-_STYLES = (
-    f'<styleSheet xmlns="{_NS_MAIN}"><fonts count="2"><font><sz val="12"/><name val="Calibri"/>'
-    '<family val="2"/></font><font><b/><sz val="12"/><name val="Calibri"/><family val="2"/></font>'
-    '</fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill>'
-    '<patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid">'
-    '<fgColor rgb="FFEFF2F6"/><bgColor indexed="64"/></patternFill></fill></fills>'
-    '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
-    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-    '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
-    '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>'
-    '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/>'
-    "</cellStyles></styleSheet>"
-)
+MAX_ROWS = 1_048_576
+MAX_COLS = 16_384
+MAX_CELLS = 5_000_000  # 整本活頁簿展開成表格後的儲存格上限
+MAX_SHARED_STRINGS = 5_000_000
+MAX_SHEETS = 1000
+MAX_PART_BYTES = 200 * 1024 * 1024  # 單一零件解壓後的上限（防止壓縮炸彈）
+MAX_TOTAL_BYTES = 1024 * 1024 * 1024
+MAX_SMALL_PART_NODES = 2_000_000  # 活頁簿、關聯、樣式這些小零件的元素上限
+_DIGITS = re.compile(r"[0-9]+")
+_LETTERS = re.compile(r"[A-Z]+")
+_NOT_XLSX = "找不到活頁簿內容，可能不是正確的 XLSX 檔案。"
 
 
-def column_name(index: int) -> str:
-    n = index + 1
-    name = ""
-    while n > 0:
-        r = (n - 1) % 26
-        name = chr(65 + r) + name
-        n = (n - 1) // 26
-    return name
+def _out_of_range() -> errors.QSError:
+    return errors.invalid_data("XLSX 的儲存格位置超出 Excel 的範圍。")
+
+
+def _too_large(what: str) -> errors.QSError:
+    return errors.invalid_data(f"XLSX {what}過大，無法轉換。")
 
 
 def column_index(ref: str) -> int:
+    """「AB12」→ 27；超過 XFD 時回傳 MAX_COLS（由呼叫端判定超出範圍）。"""
+    m = _LETTERS.match(ref)
     n = 0
-    for ch in ref:
-        if not "A" <= ch <= "Z":
-            break
+    for ch in m.group(0) if m else "":
         n = n * 26 + ord(ch) - 64
+        if n > MAX_COLS:
+            return MAX_COLS
     return max(0, n - 1)
 
 
-def _display_width(s: str) -> int:
-    return sum(2 if ord(ch) > 0x2E80 else 1 for ch in s)
-
-
-def sheet_names(tables: Sequence[Table]) -> list[str]:
-    """\\/?*[]: 換成 _、最多 31 字、不分大小寫重複時加「 (n)」、空白名稱用「工作表{n}」。"""
-    used: set[str] = set()
-    names: list[str] = []
-    for i, t in enumerate(tables):
-        name = _SHEET_NAME_BAD.sub("_", t.name) or f"工作表{i + 1}"
-        name = name[:31]
-        candidate, n = name, 2
-        while candidate.lower() in used:
-            candidate = f"{name[:28]} ({n})"
-            n += 1
-        used.add(candidate.lower())
-        names.append(candidate)
-    return names
-
-
-# ---------------------------------------------------------------- 寫入
-
-
-class _SharedStrings:
-    def __init__(self) -> None:
-        self.index: dict[str, int] = {}
-        self.items: list[str] = []
-        self.refs = 0
-
-    def id(self, text: str) -> int:
-        self.refs += 1
-        if text not in self.index:
-            self.index[text] = len(self.items)
-            self.items.append(text)
-        return self.index[text]
-
-    def xml(self) -> str:
-        body = "".join(
-            f'<si><t xml:space="preserve">{xmldom.escape(t)}</t></si>' for t in self.items
-        )
-        return (
-            f'{_XML_DECL}<sst xmlns="{_NS_MAIN}" count="{self.refs}" '
-            f'uniqueCount="{len(self.items)}">{body}</sst>'
-        )
-
-
-def _column_widths(table: Table) -> list[int]:
-    count = max((len(r) for r in table.rows), default=0)
-    widths = [8] * count
-    for row in table.rows[:WIDTH_SCAN_ROWS]:
-        for c, cell in enumerate(row):
-            longest = max((_display_width(part) for part in cell.split("\n") if part), default=0)
-            widths[c] = min(60, max(widths[c], longest + 2))
-    return widths
-
-
-def _cell(ref: str, cell: str, row: int, style: str, shared: _SharedStrings) -> str:
-    if row > 0 and looks_numeric(cell):
-        value = swift_double(cell)
-        if value is not None and math.isfinite(value):
-            return f'<c r="{ref}"{style}><v>{xmldom.escape(cell)}</v></c>'
-    return f'<c r="{ref}"{style} t="s"><v>{shared.id(cell)}</v></c>'
-
-
-def _sheet_xml(table: Table, shared: _SharedStrings) -> str:
-    parts = [_XML_DECL, f'<worksheet xmlns="{_NS_MAIN}" xmlns:r="{_NS_REL}">']
-    frozen = len(table.rows) > 1
-    if frozen:
-        parts.append(
-            '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" '
-            'activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
-        )
-    else:
-        parts.append('<sheetViews><sheetView workbookViewId="0"/></sheetViews>')
-    widths = _column_widths(table)
-    if widths:
-        cols = "".join(
-            f'<col min="{i + 1}" max="{i + 1}" width="{w}" customWidth="1"/>'
-            for i, w in enumerate(widths)
-        )
-        parts.append(f"<cols>{cols}</cols>")
-    parts.append("<sheetData>")
-    for r, row in enumerate(table.rows):
-        style = ' s="1"' if r == 0 and frozen else ""
-        cells = "".join(
-            _cell(f"{column_name(c)}{r + 1}", cell, r, style, shared)
-            for c, cell in enumerate(row)
-            if cell
-        )
-        parts.append(f'<row r="{r + 1}">{cells}</row>')
-    parts.append("</sheetData></worksheet>")
-    return "".join(parts)
-
-
-def _package_parts(names: list[str]) -> dict[str, str]:
-    n = len(names)
-    overrides = "".join(
-        f'<Override PartName="/xl/worksheets/sheet{i + 1}.xml" '
-        f'ContentType="{_CT}.spreadsheetml.worksheet+xml"/>'
-        for i in range(n)
-    )
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    sheets = "".join(
-        f'<sheet name="{xmldom.escape(name)}" sheetId="{i + 1}" r:id="rId{i + 1}"/>'
-        for i, name in enumerate(names)
-    )
-    rel = f"{_NS_REL}/"
-    rels = "".join(
-        f'<Relationship Id="rId{i + 1}" Type="{rel}worksheet" Target="worksheets/sheet{i + 1}.xml"/>'
-        for i in range(n)
-    )
-    rels += f'<Relationship Id="rId{n + 1}" Type="{rel}styles" Target="styles.xml"/>'
-    rels += f'<Relationship Id="rId{n + 2}" Type="{rel}sharedStrings" Target="sharedStrings.xml"/>'
-    return {
-        "[Content_Types].xml": (
-            f'{_XML_DECL}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.'
-            'relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
-            f'<Override PartName="/xl/workbook.xml" ContentType="{_CT}.spreadsheetml.sheet.main+xml"/>'
-            f'{overrides}<Override PartName="/xl/styles.xml" ContentType="{_CT}.spreadsheetml.'
-            'styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="'
-            f'{_CT}.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" '
-            'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
-            f'<Override PartName="/docProps/app.xml" ContentType="{_CT}.extended-properties+xml"/>'
-            "</Types>"
-        ),
-        "_rels/.rels": (
-            f'{_XML_DECL}<Relationships xmlns="{_NS_PKG_REL}"><Relationship Id="rId1" '
-            f'Type="{rel}officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" '
-            'Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/'
-            'core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" '
-            f'Type="{rel}extended-properties" Target="docProps/app.xml"/></Relationships>'
-        ),
-        "docProps/core.xml": (
-            f"{_XML_DECL}<cp:coreProperties xmlns:cp="
-            '"http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
-            'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" '
-            'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>QUICK_SEEMD'
-            '</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">'
-            f"{now}</dcterms:created></cp:coreProperties>"
-        ),
-        "docProps/app.xml": (
-            f'{_XML_DECL}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/'
-            '2006/extended-properties"><Application>QUICK_SEEMD</Application></Properties>'
-        ),
-        "xl/workbook.xml": (
-            f'{_XML_DECL}<workbook xmlns="{_NS_MAIN}" xmlns:r="{_NS_REL}"><bookViews>'
-            f"<workbookView/></bookViews><sheets>{sheets}</sheets></workbook>"
-        ),
-        "xl/_rels/workbook.xml.rels": (
-            f'{_XML_DECL}<Relationships xmlns="{_NS_PKG_REL}">{rels}</Relationships>'
-        ),
-        "xl/styles.xml": _XML_DECL + _STYLES,
-    }
-
-
-def write_xlsx(tables: Sequence[Table], out: Path, check: Callable[[], None] | None = None) -> None:
-    """寫出 XLSX；check 會在每張工作表之前呼叫（用來檢查取消）。"""
-    sheets = list(tables) or [Table("工作表1", ())]
-    names = sheet_names(sheets)
-    shared = _SharedStrings()
-    parts = _package_parts(names)
-    for i, table in enumerate(sheets):
-        if check is not None:
-            check()
-        parts[f"xl/worksheets/sheet{i + 1}.xml"] = _sheet_xml(table, shared)
-    parts["xl/sharedStrings.xml"] = shared.xml()
-    with zipfile.ZipFile(out, "x", zipfile.ZIP_DEFLATED) as z:
-        for name, content in parts.items():
-            z.writestr(name, content.encode("utf-8"))
-
-
-# ---------------------------------------------------------------- 讀取
+def _row_number(raw: str | None, fallback: int) -> int:
+    """列號（從 0 起算）；只接受 ASCII 數字，超出 Excel 範圍就拒絕。"""
+    if raw is None or not _DIGITS.fullmatch(raw):
+        return fallback
+    if len(raw) > 7 or not 1 <= int(raw) <= MAX_ROWS:
+        raise _out_of_range()
+    return int(raw) - 1
 
 
 def is_date_format(fmt_id: int, code: str | None) -> bool:
@@ -263,29 +89,41 @@ def format_serial_date(serial: float, date1904: bool) -> str:
     return moment.strftime("%Y-%m-%d %H:%M:%S" if has_time else "%Y-%m-%d")
 
 
+# ---------------------------------------------------------------- 套件
+
+
 class _Package:
+    """只讀取 zip 裡的零件；拒絕絕對路徑與「..」，並限制解壓後大小。"""
+
     def __init__(self, z: zipfile.ZipFile) -> None:
         self.z = z
         self.names = set(z.namelist())
+        self.total = 0
+
+    def read(self, path: str) -> bytes | None:
+        norm = posixpath.normpath(path)
+        if norm.startswith(("/", "../")) or norm == ".." or norm not in self.names:
+            return None
+        info = self.z.getinfo(norm)
+        if info.file_size > MAX_PART_BYTES:
+            raise _too_large("內容")
+        with self.z.open(info) as fh:
+            data = fh.read(MAX_PART_BYTES + 1)
+        if len(data) > MAX_PART_BYTES:
+            raise _too_large("內容")
+        self.total += len(data)
+        if self.total > MAX_TOTAL_BYTES:
+            raise _too_large("內容")
+        return data
 
     def load(self, path: str) -> xmldom.Node | None:
-        path = posixpath.normpath(path)
-        if path not in self.names:
+        data = self.read(path)
+        if data is None:
             return None
-        info = self.z.getinfo(path)
-        if info.file_size > MAX_PART_BYTES:
-            raise errors.invalid_data("XLSX 內容過大。")
-        return xmldom.parse(self.z.read(path))
-
-
-def _string_item(node: xmldom.Node) -> str:
-    out: list[str] = []
-    for child in node.children:
-        if child.local_name == "t":
-            out.append(child.text)
-        elif child.local_name == "r":
-            out.extend(t.text for t in child.children_named("t"))
-    return "".join(out)
+        try:
+            return xmldom.parse(data, MAX_SMALL_PART_NODES)
+        except xmldom.XMLTooLarge as exc:
+            raise _too_large("內容") from exc
 
 
 def _relationships(pkg: _Package) -> dict[str, str]:
@@ -306,68 +144,184 @@ def _date_styles(pkg: _Package) -> set[int]:
     custom: dict[int, str] = {}
     for f in styles.descendants("numFmt"):
         fid, code = f.attribute("numFmtId"), f.attribute("formatCode")
-        if fid is not None and fid.isdigit() and code is not None:
+        if fid is not None and _DIGITS.fullmatch(fid) and code is not None:
             custom[int(fid)] = code
     xfs = styles.children[0].first_child("cellXfs")
     out: set[int] = set()
     for i, xf in enumerate(xfs.children_named("xf") if xfs else []):
         raw = xf.attribute("numFmtId") or "0"
-        fid = int(raw) if raw.isdigit() else 0
+        fid = int(raw) if _DIGITS.fullmatch(raw) else 0
         if is_date_format(fid, custom.get(fid)):
             out.add(i)
     return out
 
 
-def _cell_value(c: xmldom.Node, shared: list[str], dates: set[int], date1904: bool) -> str:
-    kind = c.attribute("t") or "n"
-    v = c.first_child("v")
-    if kind == "s":
-        idx = (v.text.strip() if v else "").strip()
-        return shared[int(idx)] if idx.isdigit() and int(idx) < len(shared) else ""
-    if kind == "inlineStr":
-        node = c.first_child("is")
-        return _string_item(node) if node else ""
-    if kind == "b":
-        return "TRUE" if v is not None and v.text == "1" else "FALSE"
-    value = v.text if v is not None else ""
-    style = c.attribute("s")
-    if kind == "n" and style is not None and style.isdigit() and int(style) in dates:
-        serial = swift_double(value)
-        if serial is not None:
-            return format_serial_date(serial, date1904)
-    return value
+# ---------------------------------------------------------------- 串流解析
 
 
-def _read_sheet(doc: xmldom.Node, ctx: tuple[list[str], set[int], bool]) -> tuple:
-    grid: dict[int, dict[int, str]] = {}
-    max_row = max_col = -1
-    next_row = 0
-    for row_node in doc.descendants("row"):
-        raw = row_node.attribute("r")
-        r = (int(raw) if raw and raw.isdigit() else next_row + 1) - 1
-        next_row = r + 1
-        next_col = 0
-        for c in row_node.children_named("c"):
-            ref = c.attribute("r")
-            col = column_index(ref) if ref is not None else next_col
-            next_col = col + 1
-            value = _cell_value(c, *ctx)
-            if not value:
-                continue
-            grid.setdefault(r, {})[col] = value
-            max_row, max_col = max(max_row, r), max(max_col, col)
-    rows = [
-        [grid.get(r, {}).get(c, "") for c in range(max(max_col, 0) + 1)] for r in range(max_row + 1)
-    ]
-    used = max((max((i + 1 for i, v in enumerate(row) if v), default=0) for row in rows), default=0)
-    return tuple(tuple(row[:used]) for row in rows)
+def _local(name: str) -> str:
+    return name.rsplit(":", 1)[-1]
+
+
+def _stream(data: bytes, start: Callable, end: Callable, chars: Callable) -> None:
+    parser = xmldom.new_parser()
+    parser.StartElementHandler = start
+    parser.EndElementHandler = end
+    parser.CharacterDataHandler = chars
+    try:
+        parser.Parse(data, True)
+    except (expat.ExpatError, xmldom.XMLRefused) as exc:
+        raise errors.unreadable(_NOT_XLSX) from exc
+
+
+def _shared_strings(pkg: _Package) -> list[str]:
+    """<si><t>…</t></si> 或 <si><r><t>…</t></r>…</si>；略過注音／振假名 <rPh>。"""
+    data = pkg.read("xl/sharedStrings.xml")
+    if data is None:
+        return []
+    items: list[str] = []
+    state = {"si": False, "t": False, "rph": 0, "buf": []}
+
+    def start(name: str, _attrs: dict) -> None:
+        local = _local(name)
+        if local == "si":
+            state["si"], state["buf"] = True, []
+        elif local == "rPh":
+            state["rph"] += 1
+        elif local == "t" and state["si"] and not state["rph"]:
+            state["t"] = True
+
+    def end(name: str) -> None:
+        local = _local(name)
+        if local == "si" and state["si"]:
+            if len(items) >= MAX_SHARED_STRINGS:
+                raise _too_large("共用字串")
+            items.append("".join(state["buf"]))
+            state["si"] = False
+        elif local == "rPh":
+            state["rph"] -= 1
+        elif local == "t":
+            state["t"] = False
+
+    def chars(text: str) -> None:
+        if state["t"]:
+            state["buf"].append(text)
+
+    _stream(data, start, end, chars)
+    return items
+
+
+class _SheetReader:
+    """邊解析邊收集非空白儲存格（稀疏），最後才展開成表格。"""
+
+    def __init__(self, shared: list[str], dates: set[int], date1904: bool) -> None:
+        self.shared, self.dates, self.date1904 = shared, dates, date1904
+        self.grid: dict[int, dict[int, str]] = {}
+        self.max_row = self.max_col = -1
+        self.next_row = 0
+        self.row = 0
+        self.next_col = 0
+        self.cell: dict[str, str] | None = None
+        self.capture: list[str] | None = None
+        self.v: str | None = None
+        self.inline: list[str] | None = None
+        self.rph = 0
+
+    def start(self, name: str, attrs: dict[str, str]) -> None:
+        local = _local(name)
+        if local == "row":
+            self.row = _row_number(attrs.get("r"), self.next_row)
+            self.next_row, self.next_col = self.row + 1, 0
+        elif local == "c":
+            self.cell, self.v, self.inline = attrs, None, None
+        elif local == "v" and self.cell is not None:
+            self.capture = []
+        elif local == "is" and self.cell is not None:
+            self.inline = []
+        elif local == "rPh":
+            self.rph += 1
+        elif local == "t" and self.inline is not None and not self.rph:
+            self.capture = []
+
+    def end(self, name: str) -> None:
+        local = _local(name)
+        if local == "v" and self.capture is not None:
+            self.v, self.capture = "".join(self.capture), None
+        elif local == "t" and self.capture is not None and self.inline is not None:
+            self.inline.append("".join(self.capture))
+            self.capture = None
+        elif local == "rPh":
+            self.rph -= 1
+        elif local == "c" and self.cell is not None:
+            self._store()
+            self.cell = None
+
+    def chars(self, text: str) -> None:
+        if self.capture is not None:
+            self.capture.append(text)
+
+    def _value(self) -> str:
+        kind = self.cell.get("t") or "n"
+        v = self.v
+        if kind == "s":
+            idx = (v or "").strip()
+            ok = _DIGITS.fullmatch(idx) and len(idx) < 12 and int(idx) < len(self.shared)
+            return self.shared[int(idx)] if ok else ""
+        if kind == "inlineStr":
+            return "".join(self.inline or [])
+        if kind == "b":
+            return "TRUE" if v == "1" else "FALSE"
+        value = v or ""
+        style = self.cell.get("s")
+        if kind == "n" and style and _DIGITS.fullmatch(style) and int(style) in self.dates:
+            serial = swift_double(value)
+            if serial is not None:
+                return format_serial_date(serial, self.date1904)
+        return value
+
+    def _store(self) -> None:
+        ref = self.cell.get("r")
+        col = column_index(ref) if ref is not None else self.next_col
+        if col >= MAX_COLS:
+            raise _out_of_range()
+        self.next_col = col + 1
+        value = self._value()
+        if not value:
+            return
+        self.grid.setdefault(self.row, {})[col] = value
+        self.max_row, self.max_col = max(self.max_row, self.row), max(self.max_col, col)
+
+    def table_rows(self, budget: int) -> tuple[tuple[str, ...], ...]:
+        if self.max_row < 0:
+            return ()
+        if (self.max_row + 1) * (self.max_col + 1) > budget:
+            raise errors.invalid_data(f"試算表太大（超過 {MAX_CELLS:,} 個儲存格），無法轉換。")
+        width = self.max_col + 1
+        rows = []
+        for r in range(self.max_row + 1):
+            cells = self.grid.get(r, {})
+            rows.append(tuple(cells.get(c, "") for c in range(width)))
+        return tuple(rows)
 
 
 def _open(path: Path) -> zipfile.ZipFile:
     try:
         return zipfile.ZipFile(path)
     except (zipfile.BadZipFile, OSError) as exc:
-        raise errors.unreadable("找不到活頁簿內容，可能不是正確的 XLSX 檔案。") from exc
+        raise errors.unreadable(_NOT_XLSX) from exc
+
+
+def _sheet_parts(pkg: _Package, workbook: xmldom.Node) -> list[tuple[str, str]]:
+    targets = _relationships(pkg)
+    sheets = workbook.descendants("sheet")
+    if len(sheets) > MAX_SHEETS:
+        raise errors.invalid_data(f"活頁簿的工作表太多（超過 {MAX_SHEETS} 張），無法轉換。")
+    out = []
+    for i, sheet in enumerate(sheets):
+        rid = sheet.attribute("id")
+        part = (targets.get(rid) if rid else None) or f"xl/worksheets/sheet{i + 1}.xml"
+        out.append((sheet.attribute("name") or f"工作表{i + 1}", part))
+    return out
 
 
 def read_xlsx(path: Path, check: Callable[[], None] | None = None) -> list[Table]:
@@ -375,23 +329,36 @@ def read_xlsx(path: Path, check: Callable[[], None] | None = None) -> list[Table
         pkg = _Package(z)
         workbook = pkg.load("xl/workbook.xml")
         if workbook is None:
-            raise errors.unreadable("找不到活頁簿內容，可能不是正確的 XLSX 檔案。")
-        targets = _relationships(pkg)
-        sst = pkg.load("xl/sharedStrings.xml")
-        shared = [_string_item(si) for si in sst.descendants("si")] if sst else []
+            raise errors.unreadable(_NOT_XLSX)
+        parts = _sheet_parts(pkg, workbook)
+        shared = _shared_strings(pkg)
         pr = workbook.descendants("workbookPr")
         flag = pr[0].attribute("date1904") if pr else None
-        ctx = (shared, _date_styles(pkg), flag in ("1", "true"))
+        dates = _date_styles(pkg)
         tables: list[Table] = []
-        for i, sheet in enumerate(workbook.descendants("sheet")):
+        budget = MAX_CELLS
+        for name, part in parts:
             if check is not None:
                 check()
-            rid = sheet.attribute("id")
-            part = targets.get(rid) if rid else None
-            doc = pkg.load(part or f"xl/worksheets/sheet{i + 1}.xml")
-            if doc is None:
+            data = pkg.read(part)
+            if data is None:
                 continue
-            tables.append(Table(sheet.attribute("name") or f"工作表{i + 1}", _read_sheet(doc, ctx)))
+            reader = _SheetReader(shared, dates, flag in ("1", "true"))
+            _stream(data, reader.start, reader.end, reader.chars)
+            rows = reader.table_rows(budget)
+            budget -= sum(len(r) for r in rows)
+            tables.append(Table(name, _trim_columns(rows)))
     if not tables:
         raise errors.empty_content("活頁簿中沒有工作表。")
     return tables
+
+
+def _trim_columns(rows: tuple[tuple[str, ...], ...]) -> tuple[tuple[str, ...], ...]:
+    """去掉每列尾端多餘的空白欄。"""
+    used = 0
+    for row in rows:
+        for i in range(len(row) - 1, -1, -1):
+            if row[i]:
+                used = max(used, i + 1)
+                break
+    return tuple(row[:used] for row in rows)

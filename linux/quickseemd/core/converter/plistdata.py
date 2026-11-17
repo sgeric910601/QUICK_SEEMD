@@ -23,6 +23,8 @@ _REAL = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
+MAX_XML_NODES = 5_000_000  # XML plist 的元素上限（避免惡意檔案吃光記憶體）
+
 XML_HEADER = (
     '<?xml version="1.0" encoding="UTF-8"?>\n'
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
@@ -199,7 +201,10 @@ def from_foundation(obj: Any) -> Value:
 def read_plist(data: bytes) -> Value:
     head = data[:64].decode("utf-8", "replace")
     if "<?xml" in head or "<plist" in head:
-        root = xmldom.parse(data)
+        try:
+            root = xmldom.parse(data, MAX_XML_NODES)
+        except xmldom.XMLTooLarge as exc:
+            raise errors.invalid_data("plist 檔案太大，無法轉換。") from exc
         if root is not None:
             plist = root.first_child("plist") or (root if root.name == "plist" else None)
             if plist is not None and plist.children:

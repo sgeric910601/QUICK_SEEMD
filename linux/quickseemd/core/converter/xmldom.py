@@ -14,7 +14,11 @@ class XMLRefused(ValueError):
     """XML 含有不允許的內容（實體宣告）。"""
 
 
-@dataclass
+class XMLTooLarge(ValueError):
+    """XML 的元素數量超過上限（避免惡意檔案吃光記憶體）。"""
+
+
+@dataclass(slots=True)
 class Node:
     name: str
     attributes: dict[str, str] = field(default_factory=dict)
@@ -59,12 +63,29 @@ def _refuse_entity(*_args: object) -> None:
     raise XMLRefused("XML 實體宣告不被允許")
 
 
-def parse(data: bytes) -> Node | None:
-    """解析成功回傳 #document 節點；格式錯誤或含實體宣告時回傳 None。"""
+def new_parser() -> expat.XMLParserType:
+    """不展開實體、不讀外部 DTD 的 expat 解析器（有實體宣告就丟 XMLRefused）。"""
+    parser = expat.ParserCreate()
+    parser.EntityDeclHandler = _refuse_entity
+    parser.UnparsedEntityDeclHandler = _refuse_entity
+    parser.ExternalEntityRefHandler = _refuse_entity
+    parser.buffer_text = True
+    return parser
+
+
+def parse(data: bytes, max_nodes: int | None = None) -> Node | None:
+    """解析成功回傳 #document 節點；格式錯誤或含實體宣告時回傳 None。
+
+    max_nodes：元素數量上限，超過時丟 XMLTooLarge。
+    """
     root = Node("#document")
     stack = [root]
+    count = [0]
 
     def start(name: str, attrs: dict[str, str]) -> None:
+        count[0] += 1
+        if max_nodes is not None and count[0] > max_nodes:
+            raise XMLTooLarge("XML 元素太多")
         node = Node(name, dict(attrs))
         stack[-1].children.append(node)
         stack.append(node)
@@ -76,14 +97,10 @@ def parse(data: bytes) -> Node | None:
     def chars(text: str) -> None:
         stack[-1].text += text
 
-    parser = expat.ParserCreate()
+    parser = new_parser()
     parser.StartElementHandler = start
     parser.EndElementHandler = end
     parser.CharacterDataHandler = chars
-    parser.EntityDeclHandler = _refuse_entity
-    parser.UnparsedEntityDeclHandler = _refuse_entity
-    parser.ExternalEntityRefHandler = _refuse_entity
-    parser.buffer_text = True
     try:
         parser.Parse(data, True)
     except (expat.ExpatError, XMLRefused):
