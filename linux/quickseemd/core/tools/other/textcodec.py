@@ -162,7 +162,7 @@ def _statistical_guess(data: bytes, candidates: tuple[str, ...]) -> str | None:
     最後依 candidates 的順序（Big5 在最前面＝平手時偏好繁體中文，同原版）。
     """
     try:
-        from charset_normalizer import from_bytes  # noqa: PLC0415 — 用到才載入
+        from charset_normalizer import CharsetMatch, from_bytes  # noqa: PLC0415 — 用到才載入
     except ImportError:
         log.warning("沒有 charset_normalizer，略過統計偵測")
         return None
@@ -172,11 +172,10 @@ def _statistical_guess(data: bytes, candidates: tuple[str, ...]) -> str | None:
         return None
     order = {c: i for i, c in enumerate(candidates)}
 
-    def rank(match: object) -> tuple[float, float, int]:
-        enc = _FROM_NORMALIZER[match.encoding]  # type: ignore[attr-defined]
+    def rank(match: CharsetMatch) -> tuple[float, float, int]:
+        enc = _FROM_NORMALIZER[match.encoding]
         fit = scriptfit.plausibility(_FAMILY.get(enc, "latin"), str(match))
-        score = round(fit - 2 * match.chaos, 2)  # type: ignore[attr-defined]
-        return (-score, -match.coherence, order.get(enc, len(order)))  # type: ignore[attr-defined]
+        return (-round(fit - 2 * match.chaos, 2), -match.coherence, order.get(enc, len(order)))
 
     return _FROM_NORMALIZER[min(matches, key=rank).encoding]
 
