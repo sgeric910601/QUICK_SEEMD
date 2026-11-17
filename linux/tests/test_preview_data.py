@@ -130,6 +130,13 @@ def test_json_minified_and_pretty_print() -> None:
     assert jsonview.pretty_print('{"open') == '{\n  "open'
 
 
+def test_json_pretty_print_output_is_bounded() -> None:
+    start = time.perf_counter()
+    assert jsonview.pretty_print("[" * 100_000) is None  # 縮排會平方成長
+    assert jsonview.pretty_print('{"a":[1]}', limit=5) is None
+    assert time.perf_counter() - start < 1.0
+
+
 def test_json_pretty_print_is_fast() -> None:
     blob = json.dumps([{"id": i, "v": [i, "x" * 5, None]} for i in range(60000)])
     start = time.perf_counter()
@@ -315,3 +322,12 @@ def test_sqlite_runaway_view_is_aborted(tmp_path: Path, monkeypatch: pytest.Monk
     assert time.perf_counter() - start < 2.5
     assert page is not None
     assert '<span class="sub">檢視 · ? · 1 欄</span>' in page.body
+
+
+def test_csv_column_cap() -> None:
+    text = "," * 100_000 + "\n" + "1\n" * 2000
+    page = tabular.render(text, FileInfo.virtual("wide.csv"), False)
+    assert chips(page)[0] == "2,000 列 × 100001 欄"  # 原版欄數不加千分位
+    assert [n.text for n in page.notices] == ["欄位太多，只顯示前 500 欄"]
+    assert page.body.count("<th>") == 500
+    assert len(page.body) < 30_000_000

@@ -1,14 +1,16 @@
 """Markdown → HTML（對應原版 QSMarkdown）。
 
-用 markdown-it-py（CommonMark＋表格＋刪除線，允許原始 HTML）解析，再依原版的方式重建 HTML：
+用 markdown-it-py（見 mdparser）解析，再依原版的方式重建 HTML（見 mdrender）：
 - 標題不加 id；清單項目裡一律有 <p>；表格沒有 <tbody>，只有置中／靠右才寫 style。
 - 行內樣式以「同樣式的一段文字」為單位，由內而外依序包 code、del、em、strong、a。
 - 清單項目開頭的「[ ] 」「[x] 」「[X] 」變成停用的勾選框。
 - 程式碼區塊依語言提示上色；本機圖片（< 15,000,000 位元組）變成附件 cid:md-img-N，
   找不到就顯示 img-missing 小標籤；網路圖片保留 <img src>（預覽視窗會擋下網路載入）。
 - 原始 HTML 經過 sanitize 過濾（Linux 版補充，原版直接放行）。
-- 防止惡意內容拖垮預覽（Linux 版補充）：單一段落超過 20,000 字元，或行內解析累計超過 1.2 秒後，
-  其餘段落改以純文字顯示，並回報 degraded（頁面會加一則提示）。
+Linux 版補充的上限（惡意或超大的檔案不能拖垮預覽）：
+- 只排版前 MAX_LINES 行，其餘以純文字顯示（truncated）。
+- 段落太長、解析太久、表格太大時改成純文字（degraded，見 mdparser）。
+- 同一張本機圖片只讀一次；圖片最多 MAX_IMAGES 張、合計 MAX_IMAGE_TOTAL 位元組。
 """
 
 from __future__ import annotations
@@ -16,30 +18,23 @@ from __future__ import annotations
 import mimetypes
 import os
 import stat
-import time
-from dataclasses import dataclass
-from functools import lru_cache
+from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, unquote
 
-from markdown_it import MarkdownIt
-from markdown_it.rules_core import StateCore
 from markdown_it.token import Token
 
-from . import Attachment, detect, highlight
+from . import Attachment, detect, highlight, mdparser
 from .page import escape
-from .sanitize import sanitize_html
 
 MAX_IMAGE_BYTES = 15_000_000
-INLINE_LIMIT = 20_000
-INLINE_BUDGET_SECONDS = 1.2
-_DEADLINE_KEY = "quickseemd_inline_deadline"
-_DEGRADED_KEY = "quickseemd_degraded"
+MAX_IMAGES = 200
+MAX_IMAGE_TOTAL = 64 * 1024 * 1024
+MAX_LINES = 20_000
 FRONT_MATTER_LINES = 200
 TASK_MARKERS = (("[ ] ", False), ("[x] ", True), ("[X] ", True))
-_ZS = " \t             "
-_ZS += "  　"
-_BAD_SCHEMES = ("javascript:", "vbscript:")
+_ZS = " \t\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+_ZS += "\u202f\u205f\u3000"
 
 OPEN_TAGS = {
     "paragraph_open": "<p>",
@@ -66,42 +61,36 @@ class MarkdownResult:
     attachments: dict[str, Attachment]
     images: int  # 用掉的圖片編號（筆記本接續編號用）
     degraded: bool = False  # 有段落因為太長或太複雜改以純文字顯示
+    truncated: bool = False  # 超過 MAX_LINES 行，後面以純文字顯示
 
 
-def _validate_link(url: str) -> bool:
-    """與 markdown-it 預設相同，但允許 file:（本機圖片要用）。"""
-    v = url.strip().lower()
-    if v.startswith(_BAD_SCHEMES):
-        return False
-    if v.startswith("data:"):
-        return v.startswith(("data:image/gif;", "data:image/png;", "data:image/jpeg;"))
-    return True
+@dataclass
+class MarkdownContext:
+    """同一份文件（或同一本筆記本的所有儲存格）共用的狀態：時間預算、圖片編號與上限。"""
 
+    deadline: float = field(default_factory=mdparser.new_deadline)
+    count: int = 0
+    total_bytes: int = 0
+    by_path: dict[str, str] = field(default_factory=dict)
+    attachments: dict[str, Attachment] = field(default_factory=dict)
 
-def _guarded_inline(state: StateCore) -> None:
-    """取代 markdown-it 的行內解析步驟：太長的段落或超過時間預算後，直接當純文字。"""
-    deadline = state.env.get(_DEADLINE_KEY)
-    for token in state.tokens:
-        if token.type != "inline":
-            continue
-        children: list[Token] = []
-        too_long = len(token.content) > INLINE_LIMIT
-        if too_long or (deadline is not None and time.monotonic() > deadline):
-            plain = Token("text", "", 0)
-            plain.content = token.content
-            children.append(plain)
-            state.env[_DEGRADED_KEY] = True
-        else:
-            state.md.inline.parse(token.content, state.md, state.env, children)
-        token.children = children
-
-
-@lru_cache(maxsize=1)
-def _parser() -> MarkdownIt:
-    md = MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethrough"])
-    md.validateLink = _validate_link  # type: ignore[method-assign]
-    md.core.ruler.at("inline", _guarded_inline)
-    return md
+    def attach(self, path: Path) -> str | None:
+        """本機圖片 → 附件名稱；讀不到或超過上限時回傳 None。同一個檔案只讀一次。"""
+        key = os.path.normpath(path)
+        if key in self.by_path:
+            return self.by_path[key]
+        if len(self.by_path) >= MAX_IMAGES:
+            return None
+        loaded = read_image(Path(key), MAX_IMAGE_TOTAL - self.total_bytes)
+        if loaded is None:
+            return None
+        data, mime = loaded
+        self.count += 1
+        name = f"md-img-{self.count}"
+        self.attachments[name] = Attachment(name, data, mime)
+        self.total_bytes += len(data)
+        self.by_path[key] = name
+        return name
 
 
 def _trim(s: str) -> str:
@@ -112,7 +101,7 @@ def split_front_matter(text: str) -> tuple[str, str] | None:
     """開頭的 YAML 標頭 → （表格 HTML, 其餘內文）；結尾的 --- 或 ... 要在 200 行內。"""
     if not text.startswith(("---\n", "---\r\n")):
         return None
-    lines = text.split("\n")
+    lines = text.split("\n", FRONT_MATTER_LINES + 1)  # 最後一項是其餘全文，不逐行切開
     end_idx = next(
         (
             k
@@ -150,19 +139,37 @@ def _plain_text(children: list[Token] | None) -> str:
     return "".join(out)
 
 
-def render(source: str, base_dir: Path | None, first_image: int = 0) -> MarkdownResult:
+def _split_lines(text: str, limit: int) -> tuple[str, str]:
+    """前 limit 行與其餘內容。"""
+    parts = text.split("\n", limit)
+    if len(parts) <= limit:
+        return text, ""
+    return "\n".join(parts[:limit]), parts[limit]
+
+
+def render(
+    source: str,
+    base_dir: Path | None,
+    first_image: int = 0,
+    *,
+    context: MarkdownContext | None = None,
+) -> MarkdownResult:
     """Markdown 原文 → HTML 與附件；base_dir 是相對路徑（連結、圖片）的基準資料夾。"""
     from .mdrender import BlockRenderer  # noqa: PLC0415 — 避免循環匯入
 
+    ctx = context if context is not None else MarkdownContext(count=first_image)
     front = ""
     text = source
     split = split_front_matter(text)
     if split is not None:
         front, text = split
-    renderer = BlockRenderer(base_dir, first_image)
-    env: dict[str, object] = {_DEADLINE_KEY: time.monotonic() + INLINE_BUDGET_SECONDS}
-    html = front + renderer.run(_parser().parse(text, env))
-    return MarkdownResult(html, renderer.attachments, renderer.count, bool(env.get(_DEGRADED_KEY)))
+    head, rest = _split_lines(text, MAX_LINES)
+    tokens, degraded = mdparser.parse(head, ctx.deadline)
+    html = front + BlockRenderer(base_dir, ctx).run(tokens)
+    if rest:
+        html += f"<pre>{escape(rest)}</pre>\n"
+    attachments = dict(ctx.attachments) if context is None else {}
+    return MarkdownResult(html, attachments, ctx.count, degraded, bool(rest))
 
 
 # ---------------------------------------------------------------- 圖片與連結（BlockRenderer 共用）
@@ -186,18 +193,19 @@ def local_image_path(src: str, base: str | None) -> Path | None:
     return Path(unquote(urlsplit(urljoin(base, src)).path))
 
 
-def read_image(path: Path) -> tuple[bytes, str] | None:
-    """讀本機圖片：只讀一般檔案，且要小於 15,000,000 位元組。"""
+def read_image(path: Path, budget: int = MAX_IMAGE_BYTES) -> tuple[bytes, str] | None:
+    """讀本機圖片：只讀一般檔案，要小於 15,000,000 位元組，也不能超過剩下的預算。"""
     p = Path(os.path.normpath(path))
+    limit = min(MAX_IMAGE_BYTES, budget + 1)
     try:
         st = os.stat(p)
-        if not stat.S_ISREG(st.st_mode) or st.st_size >= MAX_IMAGE_BYTES:
+        if not stat.S_ISREG(st.st_mode) or st.st_size >= limit:
             return None
         with open(p, "rb") as fh:
-            data = fh.read(MAX_IMAGE_BYTES)
+            data = fh.read(limit)
     except OSError:
         return None
-    if len(data) >= MAX_IMAGE_BYTES:
+    if len(data) >= limit:
         return None
     return data, mimetypes.guess_type(p.name)[0] or "application/octet-stream"
 
@@ -211,4 +219,4 @@ def code_block(content: str, hint: str | None) -> str:
     return f"<pre><code>{body}</code></pre>\n"
 
 
-__all__ = ["render", "split_front_matter", "MarkdownResult", "sanitize_html"]
+__all__ = ["render", "split_front_matter", "MarkdownResult", "MarkdownContext"]

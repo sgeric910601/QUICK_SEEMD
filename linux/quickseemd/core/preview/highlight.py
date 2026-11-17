@@ -10,29 +10,35 @@
 from __future__ import annotations
 
 from .langbase import Language
-from .lexer import Token
+from .lexer import TOKENS, Tokens, new_tokens
 from .lexmodes import lex
 
 MAX_WRAPPED_LINES = 4000
 MAX_HIGHLIGHTED_LINE = 8000
 PLAIN_THRESHOLD = 64 * 1024
+GUTTER_CHUNK = 10000
 
-TOKENS = "k s c n t f a p y g lit hd da dd dh dm le lw li ld lt".split()
 OPEN: dict[str, bytes] = {t: f'<span class="{t}">'.encode() for t in TOKENS}
+_OPEN_BY_CODE: list[bytes] = [OPEN[t] for t in TOKENS]
 CLOSE = b"</span>"
 ROW_OPEN = b'<div class="l">'
 ROW_CLOSE = b"</div>"
 _ROW_BREAK = ROW_CLOSE + ROW_OPEN
 
 
-def _esc(x: bytes) -> bytes:
+def _esc(x: bytes | bytearray) -> bytes | bytearray:
     return x.replace(b"&", b"&amp;").replace(b"<", b"&lt;").replace(b">", b"&gt;")
+
+
+def _triples(toks: Tokens):  # noqa: ANN202 — (起點, 終點, 代碼) 的迭代器
+    it = iter(toks)
+    return zip(it, it, it)
 
 
 # 標記用的位元組：從這些控制字元裡挑兩個文字中沒出現的，用來暫時代表 span 的開頭與結尾，
 # 整段一次跳脫後再換成真正的標籤（比逐段跳脫快很多）
 _MARK_CANDIDATES = bytes(x for x in range(1, 32) if x not in (9, 10, 12, 13, 27))
-_CODES: dict[str, bytes] = {t: bytes((0x41 + i,)) for i, t in enumerate(TOKENS)}
+_CODE_BYTES: list[bytes] = [bytes((0x41 + i,)) for i in range(len(TOKENS))]
 
 
 def _free_marks(b: bytes) -> tuple[bytes, bytes] | None:
@@ -40,59 +46,77 @@ def _free_marks(b: bytes) -> tuple[bytes, bytes] | None:
     return (found[0], found[1]) if len(found) == 2 else None
 
 
-def _render_marked(b: bytes, toks: list[Token], rows: bool, marks: tuple[bytes, bytes]) -> bytes:
+def _render_marked(b: bytes, toks: Tokens, rows: bool, marks: tuple[bytes, bytes]) -> bytes:
     mo, mc = marks
-    openers = {t: mo + code for t, code in _CODES.items()}
-    out: list[bytes] = []
-    append = out.append
+    openers = [mo + code for code in _CODE_BYTES]
+    mv = memoryview(b)
+    out = bytearray()
     prev = 0
-    for s, e, t in toks:
-        append(b[prev:s])
-        opener = openers[t]
-        append(opener)
-        piece = b[s:e]
-        if rows and 10 in piece:
-            piece = piece.replace(b"\n", mc + b"\n" + opener)
-        append(piece)
-        append(mc)
+    for s, e, k in _triples(toks):
+        out += mv[prev:s]
+        opener = openers[k]
+        out += opener
+        if rows and b.find(b"\n", s, e) >= 0:
+            out += b[s:e].replace(b"\n", mc + b"\n" + opener)
+        else:
+            out += mv[s:e]
+        out += mc
         prev = e
-    append(b[prev:])
-    body = _esc(b"".join(out))
-    for t, code in _CODES.items():
-        body = body.replace(mo + code, OPEN[t])
+    out += mv[prev:]
+    body = _esc(out)
+    for k, code in enumerate(_CODE_BYTES):
+        if (mo + code) in body:
+            body = body.replace(mo + code, _OPEN_BY_CODE[k])
     body = body.replace(mc, CLOSE)
     if rows:
         body = ROW_OPEN + body.replace(b"\n", _ROW_BREAK)
-    return body
+    return bytes(body)
 
 
-def _render_pieces(b: bytes, toks: list[Token], rows: bool) -> bytes:
+def _render_pieces(b: bytes, toks: Tokens, rows: bool) -> bytes:
     """備用：文字裡找不到可用的標記位元組時逐段跳脫。"""
-    out: list[bytes] = [ROW_OPEN] if rows else []
-    append = out.append
+    out = bytearray(ROW_OPEN if rows else b"")
     brk = _ROW_BREAK if rows else b"\n"
     prev = 0
-    for s, e, t in toks:
+    for s, e, k in _triples(toks):
         if prev < s:
-            append(_esc(b[prev:s]).replace(b"\n", brk))
-        opener = OPEN[t]
-        append(opener)
-        append(_esc(b[s:e]).replace(b"\n", CLOSE + brk + opener if rows else b"\n"))
-        append(CLOSE)
+            out += _esc(b[prev:s]).replace(b"\n", brk)
+        opener = _OPEN_BY_CODE[k]
+        out += opener
+        out += _esc(b[s:e]).replace(b"\n", CLOSE + brk + opener if rows else b"\n")
+        out += CLOSE
         prev = e
     if prev < len(b):
-        append(_esc(b[prev:]).replace(b"\n", brk))
-    return b"".join(out)
+        out += _esc(b[prev:]).replace(b"\n", brk)
+    return bytes(out)
 
 
-def render(
-    b: bytes, toks: list[Token], rows: bool, marks: tuple[bytes, bytes] | None = None
-) -> bytes:
+def render(b: bytes, toks: Tokens, rows: bool, marks: tuple[bytes, bytes] | None = None) -> bytes:
     """把詞的清單轉成 HTML（rows=True 時每行包成一個 div.l）。"""
     marks = marks if marks is not None else _free_marks(b)
     if marks is None:
         return _render_pieces(b, toks, rows)
     return _render_marked(b, toks, rows, marks)
+
+
+def has_long_line(b: bytes, limit: int) -> bool:
+    """有沒有超過 limit 位元組的一行。超過的行一定跨過某個 limit 的倍數位置，只要檢查那些點。"""
+    for p in range(limit, len(b), limit):
+        start = b.rfind(b"\n", 0, p) + 1
+        end = b.find(b"\n", p)
+        if (len(b) if end < 0 else end) - start > limit:
+            return True
+    return False
+
+
+def _gutter(lines: int) -> str:
+    """行號欄「1\n2\n…」；分段組合，避免一次產生上百萬個字串。"""
+    last = max(1, lines)
+    chunks = [
+        "\n".join(map(str, range(start, min(start + GUTTER_CHUNK, last + 1))))
+        for start in range(1, last + 1, GUTTER_CHUNK)
+    ]
+    return "\n".join(chunks)
 
 
 def _finish(body: bytes, rows: bool, newlines: int, ends_with_newline: bool) -> tuple[bytes, int]:
@@ -111,8 +135,8 @@ def _finish(body: bytes, rows: bool, newlines: int, ends_with_newline: bool) -> 
     return body, lines
 
 
-def tokens(b: bytes, lang: Language) -> list[Token]:
-    toks: list[Token] = []
+def tokens(b: bytes, lang: Language) -> Tokens:
+    toks = new_tokens()
     lex(b, lang, 0, len(b), toks)
     return toks
 
@@ -124,9 +148,8 @@ def code_view(
     b = text.encode("utf-8", "replace")
     newlines = b.count(b"\n")
     ends_nl = b.endswith(b"\n")
-    longest = max(map(len, b.split(b"\n"))) if b else 0
-    if longest > MAX_HIGHLIGHTED_LINE and len(b) > PLAIN_THRESHOLD:
-        body, lines = _finish(_esc(b), False, newlines, ends_nl)
+    if len(b) > PLAIN_THRESHOLD and has_long_line(b, MAX_HIGHLIGHTED_LINE):
+        body, lines = _finish(bytes(_esc(b)), False, newlines, ends_nl)
         html = body.decode("utf-8", "replace")
         return f'<div class="code plainwrap"><pre class="src">{html}</pre></div>', lines
     rows = (lang.wrap if wrap is None else wrap) and newlines <= MAX_WRAPPED_LINES
@@ -140,7 +163,7 @@ def code_view(
     if rows:
         digits = max(2, len(str(lines)))
         return f'<div class="code wrap{extra}" style="--gw:{digits}ch">{html}</div>', lines
-    gut = "\n".join(map(str, range(1, max(1, lines) + 1))) if gutter else ""
+    gut = _gutter(lines) if gutter else ""
     return (
         f'<div class="code{extra}"><div class="gut">{gut}</div><pre class="src">{html}</pre></div>',
         lines,

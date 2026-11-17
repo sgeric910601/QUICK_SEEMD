@@ -95,7 +95,8 @@ def test_relative_link_is_resolved(tmp_path: Path) -> None:
 def test_local_images_become_attachments(tmp_path: Path) -> None:
     (tmp_path / "img").mkdir()
     (tmp_path / "img" / "a.png").write_bytes(PNG)
-    result = markdown.render("![logo](img/a.png) ![two](img/a.png)\n", tmp_path)
+    (tmp_path / "img" / "b.png").write_bytes(PNG)
+    result = markdown.render("![logo](img/a.png) ![two](img/b.png)\n", tmp_path)
     assert result.html == (
         '<p><img src="cid:md-img-1" alt="logo"> <img src="cid:md-img-2" alt="two"></p>\n'
     )
@@ -104,6 +105,26 @@ def test_local_images_become_attachments(tmp_path: Path) -> None:
     assert att.mime == "image/png"
     assert att.data == PNG
     assert result.images == 2
+
+
+def test_same_image_is_read_once(tmp_path: Path) -> None:
+    (tmp_path / "a.png").write_bytes(PNG)
+    result = markdown.render("![x](a.png)\n" * 500, tmp_path)
+    assert set(result.attachments) == {"md-img-1"}
+    assert result.html.count('src="cid:md-img-1"') == 500
+
+
+def test_image_count_and_size_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for i in range(5):
+        (tmp_path / f"{i}.png").write_bytes(PNG)
+    monkeypatch.setattr(markdown, "MAX_IMAGES", 3)
+    result = markdown.render("".join(f"![i{i}]({i}.png) " for i in range(5)), tmp_path)
+    assert len(result.attachments) == 3
+    assert result.html.count("img-missing") == 2
+    monkeypatch.setattr(markdown, "MAX_IMAGES", 200)
+    monkeypatch.setattr(markdown, "MAX_IMAGE_TOTAL", len(PNG) * 2)
+    result = markdown.render("".join(f"![i{i}]({i}.png) " for i in range(5)), tmp_path)
+    assert len(result.attachments) == 2
 
 
 def test_missing_and_unsafe_local_images(tmp_path: Path) -> None:
@@ -188,6 +209,26 @@ def test_hostile_markdown_is_bounded(text: str) -> None:
     result = markdown.render(text, None)
     assert time.perf_counter() - start < 2.5
     assert result.degraded is True
+
+
+def test_long_documents_are_truncated_to_plain_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(markdown, "MAX_LINES", 3)
+    result = markdown.render("# a\n\nb\n**c**\n<d>\n", None)
+    assert result.truncated is True
+    assert result.html == "<h1>a</h1>\n<p>b</p>\n<pre>**c**\n&lt;d&gt;\n</pre>\n"
+
+
+def test_table_cell_amplification_is_bounded() -> None:
+    import time
+
+    wide = "|" + "a|" * 200 + "\n|" + "-|" * 200 + "\n" + "x\n" * 50_000
+    start = time.perf_counter()
+    result = markdown.render(wide, None)
+    assert time.perf_counter() - start < 2.0
+    assert result.degraded is True
+    assert "<table>" not in result.html
+    small = markdown.render("| a | b |\n|---|---|\n| 1 | 2 |\n", None)
+    assert "<table>" in small.html and small.degraded is False
 
 
 def test_normal_markdown_is_not_degraded() -> None:

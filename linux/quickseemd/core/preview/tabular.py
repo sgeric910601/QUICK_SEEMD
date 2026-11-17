@@ -2,6 +2,7 @@
 
 解析規則照原版：引號只有出現在欄位開頭才算開始；引號內的「""」是一個引號；
 引號外的 CR 丟掉；超過列數上限後只計數不儲存。
+Linux 版補充：最多顯示 500 欄（列數 × 欄數決定頁面大小，欄數不設限會讓記憶體暴增）。
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from . import fmt
 from .page import Chip, FileInfo, Notice, Page, escape
 
 MAX_ROWS = 2000
+MAX_COLUMNS = 500
 SNIFF_LINES = 20
 NUMERIC_SAMPLE = 200
 CELL_LIMIT = 500
@@ -195,13 +197,16 @@ def render(text: str, info: FileInfo, truncated_file: bool) -> Page:
         return page
     header, data = rows[0], rows[1:]
     columns = max(len(r) for r in rows)
+    shown = min(columns, MAX_COLUMNS)
     page.chips = [
         Chip(f"{fmt.number(max(0, total - 1))} 列 × {columns} 欄"),
         Chip(f"分隔：{DELIM_NAMES.get(delim, '?')}"),
     ]
     if total - 1 > MAX_ROWS or truncated_file:
-        shown = fmt.number(min(MAX_ROWS, len(data)))
+        shown_rows = fmt.number(min(MAX_ROWS, len(data)))
         suffix = "（檔案較大，僅讀取開頭部分）" if truncated_file else ""
-        page.notices.append(Notice(f"只顯示前 {shown} 列{suffix}"))
-    page.body = _table(header, data, columns)
+        page.notices.append(Notice(f"只顯示前 {shown_rows} 列{suffix}"))
+    if columns > MAX_COLUMNS:
+        page.notices.append(Notice(f"欄位太多，只顯示前 {MAX_COLUMNS} 欄"))
+    page.body = _table(header, data, shown)
     return page

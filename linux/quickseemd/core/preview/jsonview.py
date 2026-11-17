@@ -2,6 +2,7 @@
 
 排版保留原文的數字寫法與鍵的順序（不經過解析再輸出），以正規表示式逐詞處理。
 錯誤訊息是 Linux 版自己的中文說明（原版直接顯示系統的英文訊息）。
+Linux 版補充：排版結果有大小上限（很深的巢狀會讓縮排變成平方成長），超過就不排版。
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from . import fmt
 
 MINIFIED_MIN_BYTES = 200
 MINIFIED_BYTES_PER_LINE = 400
+MAX_PRETTY_CHARS = 4 * 1024 * 1024
 
 _TOKEN = re.compile(
     r'"[^"\\]*(?:\\[\s\S]?[^"\\]*)*"?'  # 字串（沒結束就到結尾）
@@ -45,33 +47,35 @@ def looks_minified(text: str) -> bool:
     return newlines < 3 or n // max(newlines, 1) > MINIFIED_BYTES_PER_LINE
 
 
-def pretty_print(text: str) -> str:
-    """縮排兩格；空物件／空陣列保持「{}」「[]」。"""
+def _piece(text: str, tok: str, i: int, indent: int) -> tuple[str, int, int]:
+    """一個詞排版後的文字、下一個位置、新的縮排層數。"""
+    c = tok[0]
+    if c in "{[":
+        j = _WS.match(text, i).end()
+        if j < len(text) and text[j] in "}]":
+            return c + text[j], j + 1, indent
+        return c + "\n" + "  " * (indent + 1), i, indent + 1
+    if c in "}]":
+        indent = max(0, indent - 1)
+        return "\n" + "  " * indent + c, i, indent
+    if c == ",":
+        return ",\n" + "  " * indent, i, indent
+    if c == ":":
+        return ": ", i, indent
+    return ("" if c in " \t\n\r" else tok), i, indent
+
+
+def pretty_print(text: str, limit: int = MAX_PRETTY_CHARS) -> str | None:
+    """縮排兩格；空物件／空陣列保持「{}」「[]」。結果超過 limit 個字元時回傳 None。"""
     out: list[str] = []
-    indent = 0
-    i, n = 0, len(text)
-    while i < n:
+    size = indent = i = 0
+    while i < len(text):
         m = _TOKEN.match(text, i)
-        tok = m.group()
-        i = m.end()
-        c = tok[0]
-        if c in "{[":
-            j = _WS.match(text, i).end()
-            if j < n and text[j] in "}]":
-                out.append(c + text[j])
-                i = j + 1
-                continue
-            indent += 1
-            out.append(c + "\n" + "  " * indent)
-        elif c in "}]":
-            indent = max(0, indent - 1)
-            out.append("\n" + "  " * indent + c)
-        elif c == ",":
-            out.append(",\n" + "  " * indent)
-        elif c == ":":
-            out.append(": ")
-        elif c not in " \t\n\r":
-            out.append(tok)
+        piece, i, indent = _piece(text, m.group(), m.end(), indent)
+        size += len(piece)
+        if size > limit:
+            return None
+        out.append(piece)
     return "".join(out)
 
 

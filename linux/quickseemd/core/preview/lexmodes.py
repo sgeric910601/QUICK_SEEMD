@@ -6,7 +6,7 @@ import re
 
 from .langbase import Language
 from .languages import BY_ID, value_language
-from .lexer import Token, run_generic
+from .lexer import CODE, Tokens, run_generic
 
 _MARKUP_NEXT = re.compile(rb"[<&]")
 _TAG_NAME = re.compile(rb"[A-Za-z0-9_\x80-\xff\-:.]*")
@@ -33,7 +33,7 @@ DIFF_META: tuple[bytes, ...] = tuple(
 )
 
 
-def lex(b: bytes, lang: Language, start: int, end: int, toks: list[Token]) -> None:
+def lex(b: bytes, lang: Language, start: int, end: int, toks: Tokens) -> None:
     """依語言的模式分析 b[start:end]。"""
     mode = lang.mode
     if mode == "plain" or start >= end:
@@ -48,9 +48,9 @@ def lex(b: bytes, lang: Language, start: int, end: int, toks: list[Token]) -> No
         run_generic(b, lang, start, end, toks)
 
 
-def _add(toks: list[Token], s: int, e: int, t: str) -> None:
+def _add(toks: Tokens, s: int, e: int, t: str) -> None:
     if s < e:
-        toks.append((s, e, t))
+        toks.extend((s, e, CODE[t]))
 
 
 def _scan_to(b: bytes, pattern: bytes, start: int, end: int) -> int:
@@ -61,7 +61,7 @@ def _scan_to(b: bytes, pattern: bytes, start: int, end: int) -> int:
 # ---------------------------------------------------------------- 標記語言
 
 
-def run_markup(b: bytes, lang: Language, start: int, end: int, toks: list[Token]) -> None:
+def run_markup(b: bytes, lang: Language, start: int, end: int, toks: Tokens) -> None:
     i = start
     while i < end:
         m = _MARKUP_NEXT.search(b, i, end)
@@ -72,7 +72,7 @@ def run_markup(b: bytes, lang: Language, start: int, end: int, toks: list[Token]
         i = j if j >= 0 else i + 1
 
 
-def _entity(b: bytes, i: int, end: int, toks: list[Token]) -> int:
+def _entity(b: bytes, i: int, end: int, toks: Tokens) -> int:
     j = _ENTITY.match(b, i + 1, end).end()
     if j < end and b[j] == 59 and j > i + 1:
         _add(toks, i, j + 1, "lit")
@@ -80,7 +80,7 @@ def _entity(b: bytes, i: int, end: int, toks: list[Token]) -> int:
     return -1
 
 
-def _markup_lt(b: bytes, lang: Language, i: int, end: int, toks: list[Token]) -> int:
+def _markup_lt(b: bytes, lang: Language, i: int, end: int, toks: Tokens) -> int:
     if b.startswith(b"<!--", i, end):
         j = _scan_to(b, b"-->", i + 4, end)
         _add(toks, i, j, "c")
@@ -99,7 +99,7 @@ def _markup_lt(b: bytes, lang: Language, i: int, end: int, toks: list[Token]) ->
     return -1
 
 
-def _tag(b: bytes, lang: Language, i: int, end: int, toks: list[Token]) -> int:
+def _tag(b: bytes, lang: Language, i: int, end: int, toks: Tokens) -> int:
     j = i + 1
     closing = b[j] == 47
     if closing:
@@ -120,7 +120,7 @@ def _tag(b: bytes, lang: Language, i: int, end: int, toks: list[Token]) -> int:
     return k
 
 
-def _attributes(b: bytes, j: int, end: int, toks: list[Token]) -> tuple[int, bool]:
+def _attributes(b: bytes, j: int, end: int, toks: Tokens) -> tuple[int, bool]:
     self_closing = False
     after_eq = False
     while j < end and b[j] != 62:
@@ -157,7 +157,7 @@ def _attributes(b: bytes, j: int, end: int, toks: list[Token]) -> tuple[int, boo
 # ---------------------------------------------------------------- 鍵值設定檔
 
 
-def run_key_value(b: bytes, lang: Language, start: int, end: int, toks: list[Token]) -> None:
+def run_key_value(b: bytes, lang: Language, start: int, end: int, toks: Tokens) -> None:
     i = start
     while i < end:
         le = b.find(b"\n", i, end)
@@ -168,7 +168,7 @@ def run_key_value(b: bytes, lang: Language, start: int, end: int, toks: list[Tok
         i = le + 1
 
 
-def _key_value_line(b: bytes, lang: Language, i: int, s: int, le: int, toks: list[Token]) -> None:
+def _key_value_line(b: bytes, lang: Language, i: int, s: int, le: int, toks: Tokens) -> None:
     value = value_language(lang.id)
     is_yaml = lang.id == "yaml"
     c = b[s]
@@ -240,7 +240,7 @@ def _find_separator(b: bytes, lang: Language, ks: int, le: int) -> int:
 # ---------------------------------------------------------------- diff
 
 
-def run_diff(b: bytes, start: int, end: int, toks: list[Token]) -> None:
+def run_diff(b: bytes, start: int, end: int, toks: Tokens) -> None:
     i = start
     while i < end:
         le = b.find(b"\n", i, end)

@@ -379,3 +379,19 @@ def test_value_language() -> None:
     assert detect.value_language("ini").line_comments == ()
     assert detect.value_language("dotenv").sigils == b"$"
     assert detect.value_language("toml").literals == frozenset({b"true", b"false"})
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (b"a" * 8001, True),
+        (b"a" * 8000, False),
+        (b"\n" + b"a" * 8001 + b"\n", True),
+        ((b"a" * 7999 + b"\n") * 20, False),
+        (b"x" * 4000 + b"\n" + b"y" * 8001 + b"\n" * 3, True),
+        (b"\n" * 50000, False),
+        (b"", False),
+    ],
+)
+def test_has_long_line(text: bytes, expected: bool) -> None:
+    assert highlight.has_long_line(text, 8000) is expected

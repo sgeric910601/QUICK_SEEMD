@@ -10,11 +10,21 @@
 from __future__ import annotations
 
 import re
+from array import array
 from collections.abc import Callable, Iterable
 
 from .langbase import Language, StringRule
 
-Token = tuple[int, int, str]
+# 詞的清單：每個詞是連續三個整數（起點, 終點, 類別代碼），用 array 存放以節省記憶體
+Tokens = array
+TOKENS = "k s c n t f a p y g lit hd da dd dh dm le lw li ld lt".split()
+CODE: dict[str, int] = {t: i for i, t in enumerate(TOKENS)}
+_N = CODE["n"]
+
+
+def new_tokens() -> Tokens:
+    return array("q")
+
 
 _ALPHA = frozenset(range(65, 91)) | frozenset(range(97, 123))
 _DIGITS = frozenset(range(48, 58))
@@ -144,7 +154,7 @@ def spec_for(lang: Language) -> Spec:
 class GenericLexer:
     """通用／CSS／日誌模式的狀態機。"""
 
-    def __init__(self, b: bytes, spec: Spec, toks: list[Token], start: int, end: int) -> None:
+    def __init__(self, b: bytes, spec: Spec, toks: Tokens, start: int, end: int) -> None:
         self.b = b
         self.spec = spec
         self.lang = spec.lang
@@ -155,7 +165,7 @@ class GenericLexer:
         self.pending: str | None = None
         self.depth = 0
         # 熱點用的捷徑（少一層屬性查找）
-        self.append = toks.append
+        self.extend = toks.extend
         self.word_match = spec.word_re.match
         self.number_match = spec.number_re.match
         self.ci = self.lang.case_insensitive
@@ -163,7 +173,7 @@ class GenericLexer:
 
     def tok(self, s: int, e: int, t: str | None) -> None:
         if t is not None and s < e:
-            self.toks.append((s, e, t))
+            self.toks.extend((s, e, CODE[t]))
 
     def eol(self, i: int) -> int:
         j = self.b.find(b"\n", i, self.end)
@@ -390,7 +400,7 @@ class GenericLexer:
             if i != self.start and b[i - 1] in self.spec.ident:
                 return -1
         j = self.number_match(b, i, end).end()
-        self.append((i, j, "n"))
+        self.extend((i, j, _N))
         self.line_start = False
         self.pending = None
         return j
@@ -401,7 +411,7 @@ class GenericLexer:
         key = b[i:j].lower() if self.ci else b[i:j]
         t, j = self._classify(key, c, j)
         if t is not None:
-            self.append((i, j, t))
+            self.extend((i, j, CODE[t]))
         self.line_start = False
         return j
 
@@ -449,6 +459,6 @@ class GenericLexer:
         return "f" if n == 40 else None
 
 
-def run_generic(b: bytes, lang: Language, start: int, end: int, toks: list[Token]) -> None:
+def run_generic(b: bytes, lang: Language, start: int, end: int, toks: Tokens) -> None:
     """以通用模式分析 b[start:end]，把上色的詞加進 toks。"""
     GenericLexer(b, spec_for(lang), toks, start, end).run()

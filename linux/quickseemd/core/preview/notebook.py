@@ -1,7 +1,8 @@
 """Jupyter Notebook（對應原版 QSNotebook）：Markdown 儲存格、程式碼、輸出（文字、圖片、HTML、錯誤）。
 
 與原版的差異：
-- 各 Markdown 儲存格的圖片編號接續下去（原版每格都從 md-img-1 開始，第二張會顯示成第一張）。
+- 各 Markdown 儲存格的圖片編號接續下去（原版每格都從 md-img-1 開始，第二張會顯示成第一張）；
+  所有儲存格共用同一份時間與圖片上限。
 - text/html 與 SVG 輸出經過 sanitize 過濾。
 """
 
@@ -15,12 +16,13 @@ import re
 
 from . import Attachment, detect, highlight, markdown
 from .languages import BY_ID
-from .page import Chip, FileInfo, Page, escape
+from .page import Chip, FileInfo, Notice, Page, escape
 from .sanitize import sanitize_html
 
 log = logging.getLogger(__name__)
 
 _ANSI = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
+DEGRADED_NOTICE = "部分內容太長或太複雜，以純文字顯示"
 IMAGE_TYPES = (("image/png", "image/png"), ("image/jpeg", "image/jpeg"))
 
 
@@ -56,15 +58,14 @@ class _NotebookRenderer:
         self.base_dir = None if info.is_virtual else info.path.parent
         self.attachments: dict[str, Attachment] = {}
         self.images = 0
-        self.md_images = 0
+        self.md = markdown.MarkdownContext()
+        self.degraded = False
         self.parts: list[str] = ['<div class="nb">']
         self.code_cells = 0
 
     def markdown_cell(self, src: str) -> None:
-        r = markdown.render(src, self.base_dir, self.md_images)
-        self.md_images = r.images
-        for k, v in r.attachments.items():
-            self.attachments.setdefault(k, v)
+        r = markdown.render(src, self.base_dir, context=self.md)
+        self.degraded = self.degraded or r.degraded or r.truncated
         self.parts.append(
             f'<div class="cell"><div class="prompt"></div><div class="md">{r.html}</div></div>'
         )
@@ -124,7 +125,9 @@ class _NotebookRenderer:
             if key in data:
                 return sanitize_html(_text(data.get(key)))
         if "text/markdown" in data:
-            return f'<div class="md">{markdown.render(_text(data.get("text/markdown")), None).html}</div>'
+            r = markdown.render(_text(data.get("text/markdown")), None, context=self.md)
+            self.degraded = self.degraded or r.degraded or r.truncated
+            return f'<div class="md">{r.html}</div>'
         if "text/plain" in data:
             return f"<pre>{escape(_strip_ansi(_text(data.get('text/plain'))))}</pre>"
         return ""
@@ -183,5 +186,7 @@ def render(info: FileInfo, text: str) -> Page | None:
         Chip(f"{len(cells)} 個儲存格（{r.code_cells} 個程式碼）"),
     ]
     page.body = "".join(r.parts)
-    page.attachments = r.attachments
+    page.attachments = {**r.md.attachments, **r.attachments}
+    if r.degraded:
+        page.notices.append(Notice(DEGRADED_NOTICE, warn=True))
     return page

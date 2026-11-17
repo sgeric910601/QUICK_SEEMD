@@ -7,17 +7,16 @@ from urllib.parse import unquote
 
 from markdown_it.token import Token
 
-from . import Attachment
 from .markdown import (
     CLOSE_TAGS,
     OPEN_TAGS,
     TASK_MARKERS,
+    MarkdownContext,
     _plain_text,
     absolute_url,
     base_uri,
     code_block,
     local_image_path,
-    read_image,
 )
 from .page import escape
 from .sanitize import sanitize_html
@@ -29,10 +28,9 @@ _ALIGN_KEEP = ("text-align:center", "text-align:right")
 
 
 class BlockRenderer:
-    def __init__(self, base_dir: Path | None, first_image: int) -> None:
+    def __init__(self, base_dir: Path | None, ctx: MarkdownContext) -> None:
         self.base = base_uri(base_dir)
-        self.attachments: dict[str, Attachment] = {}
-        self.count = first_image
+        self.ctx = ctx
         self.out: list[str] = []
         self.stack: list[str] = []
         self.task_check = False
@@ -142,14 +140,10 @@ class BlockRenderer:
         path = local_image_path(src, self.base)
         if path is None:
             return f'<img src="{escape(src)}" alt="{alt_esc}">'
-        loaded = read_image(path)
-        if loaded is None:
+        name = self.ctx.attach(path)
+        if name is None:
             label = alt_esc or escape(unquote(path.name))
             return f'<span class="img-missing">🖼 {label}</span>'
-        data, mime = loaded
-        self.count += 1
-        name = f"md-img-{self.count}"
-        self.attachments[name] = Attachment(name, data, mime)
         return f'<img src="cid:{name}" alt="{alt_esc}">'
 
 
