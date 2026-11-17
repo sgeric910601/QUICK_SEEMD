@@ -331,3 +331,46 @@ def test_csv_column_cap() -> None:
     assert [n.text for n in page.notices] == ["欄位太多，只顯示前 500 欄"]
     assert page.body.count("<th>") == 500
     assert len(page.body) < 30_000_000
+
+
+def test_sqlite_large_values_are_truncated_in_the_query(tmp_path: Path) -> None:
+    db = tmp_path / "big.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE t(a TEXT, b BLOB)")
+    con.execute("INSERT INTO t VALUES (?, ?)", ("字" * 1_000_000, b"\x00" * 3_000_000))
+    con.commit()
+    con.close()
+    page = sqliteview.render(FileInfo.of(db))
+    assert "<td>" + "字" * 300 + "…</td>" in page.body
+    assert '<td class="null">BLOB · 3 MB</td>' in page.body
+    assert len(page.body) < 100_000
+    huge = tmp_path / "huge.db"  # 超過單一值上限：SQLite 直接回報錯誤，不會讀進來
+    con = sqlite3.connect(huge)
+    con.execute("CREATE TABLE t(a)")
+    con.execute("INSERT INTO t VALUES (?)", (b"\x01" * (sqliteview.MAX_VALUE_BYTES + 10),))
+    con.commit()
+    con.close()
+    page = sqliteview.render(FileInfo.of(huge))
+    assert page is not None and len(page.body) < 100_000
+
+
+def test_sqlite_wide_tables_and_cell_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "wide.db"
+    con = sqlite3.connect(db)
+    cols = ", ".join(f"c{i}" for i in range(150))
+    con.execute(f"CREATE TABLE wide({cols})")
+    con.execute(f"INSERT INTO wide VALUES ({', '.join('1' for _ in range(150))})")
+    con.execute("CREATE TABLE z(v)")
+    con.execute("INSERT INTO z VALUES (1)")
+    con.commit()
+    con.close()
+    page = sqliteview.render(FileInfo.of(db))
+    assert '<span class="sub">資料表 · 1 筆 · 150 欄</span>' in page.body
+    assert page.body.count('<span class="ctype">ANY</span>') == 100 + 1
+    assert "欄位太多，只顯示前 100 欄" in page.body
+    monkeypatch.setattr(sqliteview, "MAX_CELLS", 50)
+    page = sqliteview.render(FileInfo.of(db))
+    assert "（內容太多，已略過）" in page.body
+    assert [n.text for n in page.notices] == ["內容太多，部分資料表沒有載入資料"]

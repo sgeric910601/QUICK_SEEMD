@@ -53,9 +53,7 @@ def to_xml(info: FileInfo) -> str | None:
     try:
         data = info.path.read_bytes()
         obj = plistlib.loads(data)
-    except (
-        Exception
-    ):  # noqa: BLE001 — 壞檔案可能讓解析器丟出各種例外（索引、struct…），一律當成不是 plist
+    except Exception:  # noqa: BLE001 — 壞檔案會丟出各種例外，一律當成不是 plist
         log.debug("plist 解析器例外：%s", info.path, exc_info=True)
         return None
     if not _estimate(obj, MAX_XML_BYTES):
