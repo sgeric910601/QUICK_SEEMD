@@ -145,11 +145,11 @@ def test_tool_srt_to_vtt_names_and_encoding(tmp_path, outdir):
 
 def test_tool_same_extension_gets_tag(tmp_path):
     src = tmp_path / "a.srt"
-    src.write_text(SRT, "utf-8")
+    src.write_bytes(SRT.encode())
     [out] = _run([src], target="srt", shift=2.0)
     assert out == tmp_path / "a-已調整.srt"
     assert "00:00:03,000 --> 00:00:04,500" in out.read_text("utf-8")
-    assert src.read_text("utf-8") == SRT
+    assert src.read_bytes() == SRT.encode()
 
 
 def test_tool_utf16_input(tmp_path, outdir):

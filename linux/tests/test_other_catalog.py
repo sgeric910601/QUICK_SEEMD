@@ -49,4 +49,6 @@ def test_quick_action_presets(action_id):
     tool = registry.tool(act.tool_id)
     assert tool.presets[action_id] == act.preset
     resolved = registry.resolve(action_id)
-    assert resolved == (tool, action_id)
+    # 「other.read-qr」同時是工具代碼與動作代碼，先認成工具（預設值相同）
+    assert resolved == (tool, None if action_id == tool.id else action_id)
+    assert tool.values_for_preset(action_id) == {**tool.defaults(), **act.preset}

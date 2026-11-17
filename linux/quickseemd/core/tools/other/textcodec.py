@@ -17,6 +17,7 @@ from enum import Enum
 from pathlib import Path
 
 from ... import errors
+from . import scriptfit
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +65,8 @@ _TO_NORMALIZER = {
     MAC_ROMAN: "mac_roman",
 }
 _FROM_NORMALIZER = {v: k for k, v in _TO_NORMALIZER.items()}
+# 各編碼對應的文字系統（scriptfit 用）
+_FAMILY = {BIG5: "zh", GB18030: "zh", SHIFT_JIS: "ja", EUC_JP: "ja", EUC_KR: "ko"}
 
 _DISPLAY = {
     "utf-8": "UTF-8",
@@ -153,27 +156,29 @@ def _try_decode(data: bytes, encoding: str) -> tuple[str, str] | None:
 
 
 def _statistical_guess(data: bytes, candidates: tuple[str, ...]) -> str | None:
-    """統計偵測（charset_normalizer），只考慮 candidates；分數相同時偏好繁體中文（Big5）。"""
+    """統計偵測（charset_normalizer），只考慮 candidates。
+
+    排序：文字像不像該語言（scriptfit）減去亂碼程度，其次語言一致性，
+    最後依 candidates 的順序（Big5 在最前面＝平手時偏好繁體中文，同原版）。
+    """
     try:
         from charset_normalizer import from_bytes  # noqa: PLC0415 — 用到才載入
     except ImportError:
         log.warning("沒有 charset_normalizer，略過統計偵測")
         return None
     names = [_TO_NORMALIZER[c] for c in candidates if c in _TO_NORMALIZER]
-    results = from_bytes(data, cp_isolation=names)
-    best = results.best()
-    if best is None:
+    matches = [m for m in from_bytes(data, cp_isolation=names) if m.encoding in _FROM_NORMALIZER]
+    if not matches:
         return None
-    chosen = best
-    for match in results:
-        if (
-            match.encoding == "big5"
-            and match.chaos <= best.chaos
-            and match.coherence >= best.coherence
-        ):
-            chosen = match
-            break
-    return _FROM_NORMALIZER.get(chosen.encoding)
+    order = {c: i for i, c in enumerate(candidates)}
+
+    def rank(match: object) -> tuple[float, float, int]:
+        enc = _FROM_NORMALIZER[match.encoding]  # type: ignore[attr-defined]
+        fit = scriptfit.plausibility(_FAMILY.get(enc, "latin"), str(match))
+        score = round(fit - 2 * match.chaos, 2)  # type: ignore[attr-defined]
+        return (-score, -match.coherence, order.get(enc, len(order)))  # type: ignore[attr-defined]
+
+    return _FROM_NORMALIZER[min(matches, key=rank).encoding]
 
 
 def _zero_counts(sample: bytes) -> tuple[int, int]:
@@ -254,6 +259,22 @@ def decode(data: bytes, forced: str | None = None) -> Decoded:
     if text is not None:
         return Decoded(text, UTF8, False)
     return _decode_legacy(data)
+
+
+_NAME_CANDIDATES: tuple[str, ...] = (BIG5, GB18030, SHIFT_JIS, EUC_KR)
+
+
+def detect_legacy_encoding(data: bytes) -> str | None:
+    """沒有標記編碼的位元組（例如舊式 ZIP 檔名）最可能的編碼；UTF-8 優先，認不出來回傳 None。"""
+    if _strict(data, UTF8) is not None:
+        return UTF8
+    guessed = _statistical_guess(data, _NAME_CANDIDATES)
+    order = ((guessed,) if guessed else ()) + _NAME_CANDIDATES
+    for enc in order:
+        hit = _try_decode(data, enc)
+        if hit is not None:
+            return hit[1]
+    return None
 
 
 def read_error_text(path: Path, exc: OSError) -> str:

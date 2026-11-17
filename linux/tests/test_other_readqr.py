@@ -147,4 +147,4 @@ def test_decode_payload_bytes():
     assert decode_payload("日本語のテキストです。今日は晴れ。".encode("cp932")) == (
         "日本語のテキストです。今日は晴れ。"
     )
-    assert decode_payload(b"\xff\xfe\x00") == "\xff\xfe\x00"
+    assert decode_payload(b"\x81\x20\x81\x20") == "\x81 \x81 "
