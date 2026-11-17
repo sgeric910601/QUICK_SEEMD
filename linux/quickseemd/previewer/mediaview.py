@@ -3,7 +3,7 @@
 - 影片畫面用 gtksink 的元件；音訊（或沒有畫面的檔案）顯示圖示，畫面送到 fakesink，
   避免 playbin 自己另外開視窗。
 - 下方控制列：播放／暫停按鈕、可拖曳的進度條、時間。
-- 開啟後自動播放；播完停在最後，再按播放從頭開始。
+- 顯示出來後自動播放；播完停在最後，再按播放從頭開始。
 """
 
 from __future__ import annotations
@@ -74,8 +74,18 @@ class MediaView(Gtk.Box):
         bus.add_signal_watch()
         self._bus_handler = bus.connect("message", self._on_message)
         self._timer = GLib.timeout_add(UPDATE_INTERVAL_MS, self._update)
+        self._started = False
+        self.connect("map", self._on_map)
         self.connect("destroy", self._on_destroy)
-        self._playbin.set_state(Gst.State.PLAYING)
+
+    def _on_map(self, _widget: Gtk.Widget) -> None:
+        """放進預覽視窗、顯示出來之後才開始播放。
+
+        太早開始的話，gtksink 找不到所屬的視窗，會自己另開一個視窗把整個播放器搬過去。
+        """
+        if not self._started:
+            self._started = True
+            self._playbin.set_state(Gst.State.PLAYING)
 
     # ------------------------------------------------------------ 畫面與控制列
 

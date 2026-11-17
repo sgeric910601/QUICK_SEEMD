@@ -21,7 +21,7 @@ from gi.repository import Gdk, GdkX11, Gio, GLib, Gtk  # noqa: E402
 from ..core import errors  # noqa: E402
 from . import content as content_mod  # noqa: E402
 from .content import Content  # noqa: E402
-from .geometry import Rect, center_on, clamp_size, fit_media  # noqa: E402
+from .geometry import Rect, center_on, clamp_size, fit_media, outer_size  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ class PreviewWindow(Gtk.Window):
             return
         workarea = self.workarea()
         width, height = clamp_size(size, workarea)
-        x, y = center_on((width, height), self._parent_rect(), workarea)
+        x, y = center_on(outer_size((width, height)), self._parent_rect(), workarea)
         if self.get_visible():
             self.resize(width, height)
         else:

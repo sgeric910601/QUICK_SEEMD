@@ -1,4 +1,4 @@
-"""預覽視窗的大小與位置計算。"""
+"""預覽視窗的大小與位置計算（大小指內容區；整個視窗再加上標題列）。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ from quickseemd.previewer.geometry import (
     center_on,
     clamp_size,
     fit_media,
+    max_content,
     max_size,
+    outer_size,
 )
 
 SCREEN = Rect(0, 0, 1280, 800)
@@ -21,13 +23,23 @@ def test_max_size_is_85_percent_of_workarea():
     assert max_size(Rect(100, 50, 1000, 1000)) == (850, 850)
 
 
+def test_max_content_leaves_room_for_header():
+    assert max_content(SCREEN) == (1088, 680 - HEADER_ALLOWANCE)
+
+
+def test_outer_size_adds_header():
+    assert outer_size((400, 300)) == (400, 300 + HEADER_ALLOWANCE)
+
+
 def test_clamp_keeps_small_sizes():
     assert clamp_size((920, 600), SCREEN) == (920, 600)
 
 
-def test_clamp_limits_to_85_percent():
-    assert clamp_size((920, 700), SCREEN) == (920, 680)
-    assert clamp_size((3000, 3000), SCREEN) == (1088, 680)
+def test_clamp_limits_whole_window_to_85_percent():
+    assert clamp_size((920, 700), SCREEN) == (920, 680 - HEADER_ALLOWANCE)
+    assert clamp_size((3000, 3000), SCREEN) == (1088, 680 - HEADER_ALLOWANCE)
+    w, h = outer_size(clamp_size((3000, 3000), SCREEN))
+    assert (w, h) == max_size(SCREEN)
 
 
 def test_clamp_applies_minimum():
@@ -36,24 +48,22 @@ def test_clamp_applies_minimum():
 
 def test_clamp_on_tiny_screen_never_exceeds_screen_limit():
     tiny = Rect(0, 0, 300, 200)
-    w, h = clamp_size((920, 700), tiny)
+    w, h = outer_size(clamp_size((920, 700), tiny))
     assert w <= 255 and h <= 170
 
 
-def test_fit_media_keeps_aspect_ratio_and_adds_header():
+def test_fit_media_keeps_aspect_ratio_within_limits():
     w, h = fit_media((4000, 3000), SCREEN)
-    assert h <= 680
-    content_h = h - HEADER_ALLOWANCE
-    assert abs(w / content_h - 4000 / 3000) < 0.02
+    assert outer_size((w, h))[1] <= 680
+    assert abs(w / h - 4000 / 3000) < 0.02
 
 
 def test_fit_media_never_upscales():
-    assert fit_media((400, 300), SCREEN) == (400, 300 + HEADER_ALLOWANCE)
+    assert fit_media((400, 300), SCREEN) == (400, 300)
 
 
 def test_fit_media_small_image_gets_minimum_window():
-    w, h = fit_media((16, 16), SCREEN)
-    assert (w, h) == (MIN_WIDTH, MIN_HEIGHT)
+    assert fit_media((16, 16), SCREEN) == (MIN_WIDTH, MIN_HEIGHT)
 
 
 def test_fit_media_handles_zero_size():
