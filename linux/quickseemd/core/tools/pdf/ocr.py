@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import io
 import logging
@@ -20,6 +21,7 @@ from ...model import PDF, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Info, Kind, Option, Values, note
 from . import render
 from .common import (
+    TIMEOUT_OCR_PAGE,
     work_dir,
     INPUT_LABEL,
     PDF_TYPES,
@@ -169,7 +171,7 @@ def recognize(
     if want_pdf:
         args += ["-c", "textonly_pdf=1", "pdf"]
     args.append("tsv")
-    ctx.run_process(args, "Tesseract")
+    ctx.run_process(args, "Tesseract", timeout=TIMEOUT_OCR_PAGE)
     tsv = out_base.with_name(out_base.name + ".tsv")
     lines = parse_tsv(tsv.read_text("utf-8", errors="replace")) if tsv.is_file() else []
     pdf = out_base.with_name(out_base.name + ".pdf")
@@ -194,25 +196,43 @@ class _Counts:
     found: int = 0
 
 
+def _open_layer(path: Path) -> pikepdf.Pdf:
+    """開啟 Tesseract 輸出的文字層（讀進記憶體，不佔用檔案）。"""
+    return pikepdf.open(io.BytesIO(path.read_bytes()))
+
+
 def _ocr_page(
-    ctx: ToolContext, file: Path, doc: pikepdf.Pdf, i: int, values: Values, work: Path
-) -> tuple[int, pikepdf.Pdf | None]:
-    """辨識第 i 頁（0 起算）並疊上文字層；回傳（行數, 文字層 PDF）。"""
+    ctx: ToolContext,
+    file: Path,
+    doc: pikepdf.Pdf,
+    i: int,
+    values: Values,
+    work: Path,
+    layers: contextlib.ExitStack,
+) -> int:
+    """辨識第 i 頁（0 起算）並疊上文字層；回傳行數。
+
+    文字層 PDF 一開啟就交給 layers 管理（要開到原文件寫出為止，任何錯誤也都會關閉）。
+    """
     accurate = effective_accurate(values)
     page = doc.pages[i]
     image, dpi = render_for_ocr(ctx, file, page, i + 1, accurate, work)
     language = str(values.get("language") or "traditional")
     lines, layer_path = recognize(ctx, image, language, dpi, work / f"text-{i + 1}", True)
-    if not lines or layer_path is None:
-        return len(lines), None
-    layer = pikepdf.open(io.BytesIO(layer_path.read_bytes()))
-    place_form(doc, page, layer.pages[0])
-    return len(lines), layer
+    if lines and layer_path is not None:
+        layer = layers.enter_context(_open_layer(layer_path))
+        place_form(doc, page, layer.pages[0])
+    return len(lines)
 
 
 def _ocr_document(
-    file: Path, doc: pikepdf.Pdf, values: Values, ctx: ToolContext, work: Path
-) -> tuple[_Counts, list[pikepdf.Pdf]]:
+    file: Path,
+    doc: pikepdf.Pdf,
+    values: Values,
+    ctx: ToolContext,
+    work: Path,
+    layers: contextlib.ExitStack,
+) -> _Counts:
     n = len(doc.pages)
     targets = sorted({p - 1 for p in page_list(str(values.get("pages") or ""), n, file)})
     has_text: set[int] = set()
@@ -220,7 +240,6 @@ def _ocr_document(
         texts = render.all_page_texts(ctx, file, n)
         has_text = {i for i in targets if texts[i].strip()}
     counts = _Counts()
-    layers: list[pikepdf.Pdf] = []
     suffix = "" if effective_accurate(values) else "（快速）"
     for i in targets:
         ctx.check_cancelled()
@@ -228,12 +247,9 @@ def _ocr_document(
         if i in has_text:
             counts.skipped += 1
             continue
-        found, layer = _ocr_page(ctx, file, doc, i, values, work)
+        counts.found += _ocr_page(ctx, file, doc, i, values, work, layers)
         counts.recognized += 1
-        counts.found += found
-        if layer is not None:
-            layers.append(layer)
-    return counts, layers
+    return counts
 
 
 def _summary(counts: _Counts, values: Values) -> str:
@@ -248,22 +264,19 @@ def _summary(counts: _Counts, values: Values) -> str:
 def _ocr_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
     work = work_dir(ctx, file)
     tmp = work / "ocr.pdf"
-    with open_pdf(file) as doc:
-        counts, layers = _ocr_document(file, doc, values, ctx, work)
-        try:
-            if counts.recognized == 0 and counts.skipped > 0:
-                raise errors.QSError(
-                    f"「{file.name}」的頁面已經有文字層，不需要 OCR。"
-                    "若要強制辨識，請關閉「略過已有文字的頁面」。"
-                )
-            if counts.found == 0:
-                raise errors.empty_content(f"在「{file.name}」中辨識不到任何文字。")
-            ctx.progress(0.95, "寫出 PDF…")
-            write_info(doc, read_info(doc))
-            save_pdf(doc, tmp)
-        finally:
-            for layer in layers:
-                layer.close()
+    # 離開時先關文字層、再關原文件（ExitStack 依相反順序關閉）
+    with open_pdf(file) as doc, contextlib.ExitStack() as layers:
+        counts = _ocr_document(file, doc, values, ctx, work, layers)
+        if counts.recognized == 0 and counts.skipped > 0:
+            raise errors.QSError(
+                f"「{file.name}」的頁面已經有文字層，不需要 OCR。"
+                "若要強制辨識，請關閉「略過已有文字的頁面」。"
+            )
+        if counts.found == 0:
+            raise errors.empty_content(f"在「{file.name}」中辨識不到任何文字。")
+        ctx.progress(0.95, "寫出 PDF…")
+        write_info(doc, read_info(doc))
+        save_pdf(doc, tmp)
         count = len(doc.pages)
     verify_pages(tmp, count)
     out = ctx.deliver(tmp, ctx.output_name(file, "可搜尋", "pdf"), file)

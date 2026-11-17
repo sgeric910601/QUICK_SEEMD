@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pikepdf
+from PIL import Image, UnidentifiedImageError
 
 from ... import errors, pagerange
 from ...model import ToolContext
@@ -22,6 +23,19 @@ INPUT_LABEL = "PDF 檔案"
 A4: tuple[float, float] = (595.28, 841.89)
 LETTER: tuple[float, float] = (612.0, 792.0)
 PRODUCER = "QUICK_SEEMD"
+
+# 外部程式的逾時（秒），依頁數放大；超過就結束該程式並顯示「執行逾時」
+TIMEOUT_RENDER_PAGE = 60.0  # pdftocairo 畫一頁
+TIMEOUT_OCR_PAGE = 120.0  # Tesseract 辨識一頁
+TIMEOUT_TEXT_BASE = 30.0  # pdftotext：基本時間＋每頁
+TIMEOUT_TEXT_PAGE = 2.0
+TIMEOUT_GS_BASE = 60.0  # Ghostscript：基本時間＋每頁
+TIMEOUT_GS_PAGE = 60.0
+TIMEOUT_IMAGE_CODEC = 120.0  # heif-enc／heif-convert 一張圖
+
+# 要解碼的圖片最多幾個像素（16384×16384，RGB 約 800 MB）
+# 圖片工具的共用開圖函式（loader.open_checked）合併後改用它
+DECODE_PIXEL_BUDGET = 16384 * 16384
 INFO_KEYS: tuple[str, ...] = ("Title", "Author", "Subject", "Keywords", "Creator")
 
 # 原版 PTInk：顏色值用 "#rrggbb"（COLOR 選項），畫圖時換回原版的精確 RGB
@@ -133,6 +147,28 @@ def page_list(text: str, count: int, path: Path) -> list[int]:
 def padded(n: int, total: int) -> str:
     """檔名中的頁碼補零：7 頁 → "07"。"""
     return str(n).zfill(max(2, len(str(total))))
+
+
+# ---------------------------------------------------------------- 不可信的圖片
+
+
+def open_image(path: Path, name: str | None = None) -> Image.Image:
+    """開啟圖片（只讀檔頭，還沒解碼）；不是圖片時丟出原版的「不是可辨識的圖片」。"""
+    label = name or Path(path).name
+    try:
+        return Image.open(path)
+    except Image.DecompressionBombError as exc:
+        raise errors.unreadable(f"無法解碼「{label}」。") from exc
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise errors.unreadable(f"「{label}」不是可辨識的圖片。") from exc
+
+
+def check_pixels(image: Image.Image, name: str) -> None:
+    """解碼前檢查像素數，超過上限就拒絕（避免惡意或超大圖片吃光記憶體）。"""
+    w, h = image.size
+    if w <= 0 or h <= 0 or w * h > DECODE_PIXEL_BUDGET:
+        log.warning("圖片太大，不解碼：%s（%d×%d）", name, w, h)
+        raise errors.unreadable(f"無法解碼「{name}」。")
 
 
 # ---------------------------------------------------------------- 頁面大小與座標
