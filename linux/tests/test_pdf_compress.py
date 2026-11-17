@@ -97,8 +97,8 @@ def test_compress_levels_differ(tmp_path):
     src = _photo_pdf(tmp_path / "p.pdf", _noisy_jpeg())
     extreme = run_tool("pdf.compress", [src], {"level": "extreme"}).outputs[0]
     low = run_tool("pdf.compress", [src], {"level": "low"}).outputs[0]
-    assert int(_images(extreme)[0].Width) == 400  # 96 dpi
-    assert int(_images(low)[0].Width) == 917  # 220 dpi
+    assert int(_images(extreme)[0].Width) == 400  # 96 dpi 時
+    assert int(_images(low)[0].Width) == 917  # 220 dpi 時
     assert extreme.stat().st_size < low.stat().st_size
 
 

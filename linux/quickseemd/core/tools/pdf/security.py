@@ -14,6 +14,7 @@ from ... import errors
 from ...model import PDF, ToolContext, ToolDefinition, per_file
 from ...options import Info, Kind, Option, Values, note
 from .common import (
+    work_dir,
     INPUT_LABEL,
     PDF_TYPES,
     as_bool,
@@ -105,7 +106,7 @@ def _protect_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
             R=6,
             allow=_permissions(values),
         )
-        tmp = ctx.make_work_dir(file) / "protected.pdf"
+        tmp = work_dir(ctx, file) / "protected.pdf"
         try:
             doc.save(tmp, encryption=enc)
         except (pikepdf.PdfError, OSError, ValueError) as exc:
@@ -237,7 +238,7 @@ def _unlock_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
                 f"「{file.name}」設有權限限制，請輸入「權限（擁有者）密碼」才能完整解鎖。"
             )
         ctx.progress(0.3, "寫出不需密碼的副本…")
-        tmp = ctx.make_work_dir(file) / "unlocked.pdf"
+        tmp = work_dir(ctx, file) / "unlocked.pdf"
         save_pdf(pdf, tmp)
     try:
         with pikepdf.open(tmp) as check:
@@ -339,7 +340,7 @@ def _metadata_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
         else:
             pdf.trailer.Info = pdf.make_indirect(_new_docinfo(pdf, values))
             _sync_xmp(pdf)
-        tmp = ctx.make_work_dir(file) / "metadata.pdf"
+        tmp = work_dir(ctx, file) / "metadata.pdf"
         save_pdf(pdf, tmp)
     tag = "已清除資訊" if clear else "已更新資訊"
     return [ctx.deliver(tmp, ctx.output_name(file, tag, "pdf"), file)]

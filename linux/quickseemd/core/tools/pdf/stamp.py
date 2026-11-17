@@ -14,6 +14,7 @@ import cairo
 from ...model import PDF, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Info, Kind, Option, Values
 from .common import (
+    work_dir,
     GRID_TITLES,
     INK_BLACK,
     INK_BLUE,
@@ -127,7 +128,7 @@ def _watermark_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
             draw_watermark(cr, canvas, values)
             return True
 
-        tmp = ctx.make_work_dir(file) / "watermark.pdf"
+        tmp = work_dir(ctx, file) / "watermark.pdf"
         stamp(
             doc,
             tmp,
@@ -309,7 +310,7 @@ def _numbers_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
         return True
 
     with open_pdf(file) as doc:
-        tmp = ctx.make_work_dir(file) / "numbered.pdf"
+        tmp = work_dir(ctx, file) / "numbered.pdf"
         stamp(doc, tmp, ctx, draw, message=lambda i, n: f"加入頁碼：第 {i} / {n} 頁…")
     return [ctx.deliver(tmp, ctx.output_name(file, "已加頁碼", "pdf"), file)]
 

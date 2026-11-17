@@ -288,3 +288,13 @@ def test_split_chunk_range_follows_page_count():
     opt = tool("pdf.split").option("chunk")
     assert opt.current_range({}, {"page_count": 7}) == (1, 7)
     assert opt.current_range({}, {}) == (1, 9999)
+
+
+def test_outputs_go_to_chosen_folder_and_leave_no_temp(tmp_path, outdir):
+    a = make_pdf(tmp_path / "a.pdf", pages=2)
+    b = make_pdf(tmp_path / "b.pdf", pages=1)
+    merged = run_tool("pdf.merge", [a, b], out=outdir).outputs[0]
+    parts = run_tool("pdf.split", [a], {"mode": "every_page"}, out=outdir).outputs[0]
+    assert merged.parent == outdir and parts.parent == outdir
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.pdf", "b.pdf", "out"]
+    assert sorted(p.name for p in outdir.iterdir()) == ["a-已合併.pdf", "a-已拆分"]

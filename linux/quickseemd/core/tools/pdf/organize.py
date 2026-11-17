@@ -18,6 +18,7 @@ from ...model import PDF, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Info, Kind, Option, Values, note
 from . import assemble
 from .common import (
+    work_dir,
     INPUT_LABEL,
     PDF_TYPES,
     as_int,
@@ -109,7 +110,7 @@ def run_organize(files: list[Path], values: Values, ctx: ToolContext) -> list[Pa
             raise errors.QSError("至少要保留一頁。")
         entries, index_map = _entries(file, doc, items)
         ctx.progress(0.2, f"寫出 PDF（共 {len(entries)} 頁）…")
-        tmp = ctx.make_work_dir(file) / "organized.pdf"
+        tmp = work_dir(ctx, file) / "organized.pdf"
         assemble.write(
             entries,
             read_outline(doc, index_map.get),
@@ -168,7 +169,7 @@ def _rotate_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
             page = doc.pages[n - 1]
             page.obj.Rotate = (rotation(page) + angle) % 360
             ctx.progress((i + 1) / len(pages) * 0.8)
-        tmp = ctx.make_work_dir(file) / "rotated.pdf"
+        tmp = work_dir(ctx, file) / "rotated.pdf"
         save_pdf(doc, tmp)
     return [ctx.deliver(tmp, ctx.output_name(file, "已旋轉", "pdf"), file)]
 

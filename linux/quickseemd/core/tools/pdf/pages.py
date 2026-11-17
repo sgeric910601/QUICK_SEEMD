@@ -13,6 +13,7 @@ from ...model import PDF, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Info, Kind, Option, Values, note
 from . import assemble, render
 from .common import (
+    work_dir,
     INPUT_LABEL,
     PDF_TYPES,
     as_bool,
@@ -79,7 +80,7 @@ def run_merge(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]
                 entries.append(assemble.Entry(doc, None, blank_size=size))
         out_name = _merge_name(files, str(values.get("name") or ""), ctx)
         ctx.progress(0.3, f"寫入合併後的 PDF（共 {len(entries)} 頁）…")
-        tmp = ctx.make_work_dir(files[0]) / "merged.pdf"
+        tmp = work_dir(ctx, files[0]) / "merged.pdf"
         assemble.write(
             entries,
             nodes,
@@ -272,7 +273,7 @@ def _split_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
         if len(groups) == 1 and len(groups[0]) == n and not single:
             raise errors.QSError(f"「{file.name}」只有 {n} 頁，拆分後還是同一份檔案。")
         base = naming.base_name(file)
-        work = ctx.make_work_dir(file) / "parts"
+        work = work_dir(ctx, file) / "parts"
         work.mkdir()
         info = read_info(doc)
         parts: list[Path] = []
@@ -418,7 +419,7 @@ def _delete_caption(values: Values, info: Info) -> tuple[str, bool] | None:
 def _blank_pages(file: Path, doc: pikepdf.Pdf, sub: ToolContext) -> set[int]:
     n = len(doc.pages)
     texts = render.all_page_texts(sub, file, n)
-    work = sub.make_work_dir(file)
+    work = work_dir(sub, file)
     remove: set[int] = set()
     for i, page in enumerate(doc.pages):
         sub.check_cancelled()
@@ -459,7 +460,7 @@ def _delete_file(file: Path, values: Values, sub: ToolContext, multiple: bool) -
             raise errors.QSError(f"「{file.name}」共 {n} 頁，不能把全部頁面都刪除。")
         kept = [i for i in range(n) if i + 1 not in remove]
         index_map = {p: i for i, p in enumerate(kept)}
-        tmp = sub.make_work_dir(file) / "deleted.pdf"
+        tmp = work_dir(sub, file) / "deleted.pdf"
         assemble.write(
             [assemble.Entry(doc, i) for i in kept],
             read_outline(doc, index_map.get),

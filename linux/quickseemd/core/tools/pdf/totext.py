@@ -12,6 +12,7 @@ from ...model import PDF, TINTS, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Kind, Option, Values, note
 from . import render
 from .common import (
+    work_dir,
     INPUT_LABEL,
     PDF_TYPES,
     as_bool,
@@ -58,7 +59,7 @@ def _page_texts(file: Path, values: Values, ctx: ToolContext, work: Path) -> tup
 
 def _to_text_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
     separators = as_bool(values.get("separators"), True)
-    work = ctx.make_work_dir(file)
+    work = work_dir(ctx, file)
     pages, ocr_pages = _page_texts(file, values, ctx, work)
     if not any(text for _n, text in pages):
         if as_bool(values.get("auto_ocr"), True):

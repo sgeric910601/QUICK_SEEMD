@@ -15,6 +15,7 @@ from ...model import TINTS, PDF, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Info, Kind, Option, Values, note
 from . import render
 from .common import (
+    work_dir,
     INPUT_LABEL,
     PDF_TYPES,
     as_float,
@@ -35,6 +36,7 @@ FORMAT_NAMES = {"jpg": "JPG", "png": "PNG", "heic": "HEIC", "tiff": "TIFF"}
 MIN_EMBEDDED_SIDE = 8
 MAX_FORM_DEPTH = 8
 WALK_BUDGET = 50_000  # 擷取內嵌圖片時最多走幾個 XObject
+MAX_DECODE_PIXELS = 100_000_000  # 超過就不解碼成 PNG（避免吃光記憶體）
 
 # ---------------------------------------------------------------- 每頁一張
 
@@ -82,7 +84,7 @@ def _pages_mode(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
         total = len(doc.pages)
         pages = page_list(str(values.get("pages") or ""), total, file)
         base = naming.base_name(file)
-        work = ctx.make_work_dir(file)
+        work = work_dir(ctx, file)
         single = len(pages) == 1
         folder = work if single else work / naming.sanitize(f"{base}-{FORMAT_NAMES[fmt]}")
         folder.mkdir(exist_ok=True)
@@ -148,6 +150,9 @@ def _encoded(obj: pikepdf.Stream) -> tuple[bytes, str] | None:
         if len(filters) == 1:
             return obj.read_raw_bytes(), ext
         return obj.read_bytes(pikepdf.StreamDecodeLevel.generalized), ext
+    if w * h > MAX_DECODE_PIXELS:
+        log.info("內嵌圖片太大（%d×%d），略過", w, h)
+        return None
     return _as_png(obj)
 
 
@@ -185,7 +190,7 @@ def _embedded_mode(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
         total = len(doc.pages)
         pages = page_list(str(values.get("pages") or ""), total, file)
         base = naming.base_name(file)
-        folder = ctx.make_work_dir(file) / naming.sanitize(f"{base}-內嵌圖片")
+        folder = work_dir(ctx, file) / naming.sanitize(f"{base}-內嵌圖片")
         folder.mkdir()
         seen: set = set()
         budget = [WALK_BUDGET]

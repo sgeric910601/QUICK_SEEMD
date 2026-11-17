@@ -28,6 +28,7 @@ from ...model import PDF, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Info, Kind, Option, Values, note
 from ...result import format_size
 from .common import (
+    work_dir,
     INPUT_LABEL,
     PDF_TYPES,
     inspect_pdfs,
@@ -45,6 +46,7 @@ IDENTITY: Matrix = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 MAX_FORM_DEPTH = 12
 SCAN_BUDGET = 2_000_000  # 掃描時最多處理幾個指令（Form 重複引用、互相引用的惡意檔案不會爆量）
 MIN_IMAGE_SIDE = 16
+MAX_DECODE_PIXELS = 100_000_000  # 超過就不解碼（避免吃光記憶體），保留原圖
 
 
 @dataclass(frozen=True)
@@ -187,7 +189,7 @@ def _skip(obj: pikepdf.Stream) -> bool:
         w, h = int(obj.get("/Width", 0)), int(obj.get("/Height", 0))
     except (TypeError, ValueError):
         return True
-    if w <= MIN_IMAGE_SIDE or h <= MIN_IMAGE_SIDE:
+    if w <= MIN_IMAGE_SIDE or h <= MIN_IMAGE_SIDE or w * h > MAX_DECODE_PIXELS:
         return True
     if bool(obj.get("/ImageMask", False)):
         return True
@@ -332,7 +334,7 @@ def _compress_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
     with open_pdf(file) as doc:
         pages = len(doc.pages)
     ctx.progress(0.05, f"壓縮「{file.name}」（{pages} 頁）…")
-    tmp = ctx.make_work_dir(file) / "compressed.pdf"
+    tmp = work_dir(ctx, file) / "compressed.pdf"
     try:
         _compress_with_pikepdf(
             file,

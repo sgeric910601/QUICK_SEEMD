@@ -11,6 +11,7 @@ from typing import Any
 import pikepdf
 
 from ... import errors, pagerange
+from ...model import ToolContext
 from ...naming import base_name
 from ...options import Info, Kind, Option, Values
 
@@ -244,6 +245,11 @@ def write_info(pdf: pikepdf.Pdf, info: dict[str, str]) -> None:
     fresh["/CreationDate"] = pikepdf.String(date)
     fresh["/ModDate"] = pikepdf.String(date)
     pdf.trailer.Info = pdf.make_indirect(fresh)
+
+
+def work_dir(ctx: ToolContext, file: Path) -> Path:
+    """暫存資料夾：和這個檔案的輸出位置在同一顆磁碟（交付時才是原子搬移）。"""
+    return ctx.make_work_dir(ctx.output_directory(Path(file)))
 
 
 def save_pdf(pdf: pikepdf.Pdf, out: Path, **kwargs: Any) -> None:

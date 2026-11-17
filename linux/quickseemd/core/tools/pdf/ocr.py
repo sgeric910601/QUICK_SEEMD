@@ -20,6 +20,7 @@ from ...model import PDF, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Info, Kind, Option, Values, note
 from . import render
 from .common import (
+    work_dir,
     INPUT_LABEL,
     PDF_TYPES,
     as_bool,
@@ -245,7 +246,7 @@ def _summary(counts: _Counts, values: Values) -> str:
 
 
 def _ocr_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
-    work = ctx.make_work_dir(file)
+    work = work_dir(ctx, file)
     tmp = work / "ocr.pdf"
     with open_pdf(file) as doc:
         counts, layers = _ocr_document(file, doc, values, ctx, work)

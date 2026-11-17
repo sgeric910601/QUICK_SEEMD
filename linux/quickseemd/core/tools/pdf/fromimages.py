@@ -24,7 +24,7 @@ from pikepdf import Name
 from ... import backends, errors, naming
 from ...model import TINTS, PDF, ToolContext, ToolDefinition
 from ...options import Choice, Info, Kind, Option, Values, note
-from .common import A4, LETTER, as_float
+from .common import A4, LETTER, as_float, work_dir
 
 log = logging.getLogger(__name__)
 
@@ -195,6 +195,8 @@ def pictures(ctx: ToolContext, path: Path, work: Path) -> Iterator[Picture]:
         source, fmt = _decode_heif(ctx, path, work), "HEIF"
     try:
         image = Image.open(source)
+    except Image.DecompressionBombError as exc:
+        raise errors.unreadable(f"無法解碼「{path.name}」。") from exc
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise errors.unreadable(f"「{path.name}」不是可辨識的圖片。") from exc
     with image:
@@ -271,7 +273,7 @@ def write_images(files: list[Path], out: Path, values: Values, ctx: ToolContext)
 def run_from_images(files: list[Path], values: Values, ctx: ToolContext) -> list[Path]:
     if not files:
         raise errors.QSError("請選擇至少一張圖片。")
-    work = ctx.make_work_dir(files[0])
+    work = work_dir(ctx, files[0])
     if values.get("output", "merge") == "merge":
         tmp = work / "images.pdf"
         write_images(files, tmp, values, ctx)

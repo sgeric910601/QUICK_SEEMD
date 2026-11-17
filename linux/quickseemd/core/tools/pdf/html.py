@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlsplit
 from ... import errors, naming
 from ...model import PDF, TINTS, ToolContext, ToolDefinition, per_file
 from ...options import Choice, Kind, Option, Values, note
-from .common import A4, LETTER, as_bool, as_float
+from .common import A4, LETTER, as_bool, as_float, work_dir
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def _html_file(file: Path, values: Values, ctx: ToolContext) -> list[Path]:
     if count == 0:
         raise errors.QSError("WeasyPrint 產生的 PDF 無法讀取。")
     document.metadata.title = naming.base_name(file)
-    tmp = ctx.make_work_dir(file) / "html.pdf"
+    tmp = work_dir(ctx, file) / "html.pdf"
     try:
         document.write_pdf(tmp)
     except (OSError, ValueError) as exc:
