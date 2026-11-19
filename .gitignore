@@ -3,3 +3,10 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 .DS_Store
+
+# Linux
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/

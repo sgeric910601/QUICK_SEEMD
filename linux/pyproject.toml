@@ -1,0 +1,25 @@
+[project]
+name = "quickseemd"
+description = "QUICK_SEEMD for Linux"
+requires-python = ">=3.12"
+dynamic = ["version"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
+markers = [
+    "gui: needs an isolated X display (QS_TEST_DISPLAY >= :120)",
+    "slow: takes more than a few seconds",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.coverage.run]
+source = ["quickseemd/core"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

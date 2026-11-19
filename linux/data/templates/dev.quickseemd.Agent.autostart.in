@@ -1,0 +1,11 @@
+[Desktop Entry]
+# QUICK_SEEMD 背景程式：登入時自動啟動（系統匣、拖曳輪盤、右鍵工作佇列）
+Type=Application
+Name=QUICK_SEEMD
+Comment=萬用預覽・轉檔・工具箱
+Exec=@AGENT_EXEC@
+Icon=dev.quickseemd.App
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-QuickSeemd-Autostart=true
